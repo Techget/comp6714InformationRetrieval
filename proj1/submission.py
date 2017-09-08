@@ -1,4 +1,5 @@
 ## Submission.py for COMP6714-Project1
+import math
 
 ###################################################################################################################
 ## Question No. 0:
@@ -186,7 +187,7 @@ def decode_gamma(inputs):# do not change the function heading
 
 ##### spliter, decode delta code #####
 
-def read_one_number(input_string):
+def read_one_delta_number(input_string):
     if input_string[0] == '0':
         return 1,1
     
@@ -231,7 +232,7 @@ def decode_delta(inputs):# do not change the function heading
     output = []
     
     while cur_pos < len(inputs):  
-        temp_cur_pos, temp_output = read_one_number(inputs[cur_pos:])
+        temp_cur_pos, temp_output = read_one_delta_number(inputs[cur_pos:])
         cur_pos += temp_cur_pos
         output.append(temp_output)
 
@@ -239,5 +240,43 @@ def decode_delta(inputs):# do not change the function heading
 
 ##### spliter, decode rice code #####
 
-def decode_rice(inputs, b):# do not change the heading of the function
-    pass # **replace** this line with your code
+def read_one_rice_number(input_string, b):
+    digits_after_unary = int(math.log(b, 2))
+    
+    #special case for 1
+    if input_string[0:(1 + digits_after_unary)] == '0' * (1+digits_after_unary):
+        return 1 + digits_after_unary, 1
+   
+    unary_flag = True
+    output = None
+    unary_number = 0
+    cur_pos = 0
+    
+    for bit in input_string:
+        if unary_flag:
+            if bit == '1':
+                unary_number += 1
+            else:
+                unary_flag = False
+        else:
+            binary_string = input_string[cur_pos : cur_pos + digits_after_unary]
+            r = binary_str_to_int(binary_string)
+            output = unary_number * b + r
+            cur_pos += digits_after_unary
+            break
+        
+        cur_pos += 1
+    
+    # return the how many digits has read, also the corresponding number
+    return cur_pos, output
+
+def decode_rice(inputs, b):# do not change the function heading
+    cur_pos = 0
+    output = []
+    
+    while cur_pos < len(inputs):  
+        temp_cur_pos, temp_output = read_one_rice_number(inputs[cur_pos:], b)
+        cur_pos += temp_cur_pos
+        output.append(temp_output)
+
+    return output
