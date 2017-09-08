@@ -7,7 +7,6 @@ def add(a, b): # do not change the heading of the function
 
 
 
-
 ###################################################################################################################
 ## Question No. 1:
 
@@ -131,11 +130,114 @@ def Logarithmic_merge(index, cut_off, buffer_size): # do not change the heading 
 ###################################################################################################################
 ## Question No. 3:
 
-def decode_gamma(inputs):# do not change the heading of the function
-    pass # **replace** this line with your code
+##### decode gamma code #####
 
-def decode_delta(inputs):# do not change the heading of the function
-    pass # **replace** this line with your code
+def binary_str_to_int(string):
+    s = string[::-1]
+    base = 0
+    output = 0
+    
+    for char in s:
+        output += int(char) * (2 ** base)
+        base += 1
+    
+    return output
+    
+def decode_gamma(inputs):# do not change the function heading
+    if inputs == '':
+        # In gamma code, not even a digit stands for 0
+        return [0]
+    
+    binary_bits = 0
+    unary_flag = True
+    # The first binary '1' is deliberately omitted, so the string init with '1' instead of ''
+    binary_string = '1'
+    output = []
+    
+    for bit in inputs:
+        if unary_flag:
+            if bit == '1':
+                binary_bits += 1
+            else:
+                unary_flag = False
+        else:
+            if binary_bits > 0:
+                # concatenate to binary_string
+                binary_string += bit
+                binary_bits -= 1
+            else:
+                output.append(binary_str_to_int(binary_string))
+                # recover for next number decoding
+                binary_string = '1'
+                if bit == '0':
+                    # means next number is 1
+                    binary_bits = 0
+                    unary_flag = False
+                elif bit == '1':
+                    binary_bits = 1
+                    unary_flag = True
+                else:
+                    print("Strange, the bit is:", bit)
+    
+    # The last number
+    output.append(binary_str_to_int(binary_string))
+    
+    return output
+
+##### spliter, decode delta code #####
+
+def read_one_number(input_string):
+    if input_string[0] == '0':
+        return 1,1
+    
+    binary_bits = 0
+    unary_flag = True
+    output = None
+    gamma_code = ''
+    cur_pos = 0
+    
+    for bit in input_string:
+        if unary_flag:
+            if bit == '1':
+                binary_bits += 1
+                gamma_code += bit
+            else:
+                gamma_code += bit
+                unary_flag = False
+        else:
+            if binary_bits > 0:
+                gamma_code += bit
+                binary_bits -= 1
+            else:
+                # make use of the `decode_gamma` we defined previously
+                digits_need = decode_gamma(gamma_code)[0]
+                # The highest radix 1 is removed, so we need to do minus 1 here
+                digits_need -= 1
+                
+                binary_string = '1' + input_string[cur_pos:cur_pos + digits_need]
+                # print("binary_string:", binary_string)
+                output = binary_str_to_int(binary_string)
+                
+                cur_pos += digits_need
+                break
+        
+        cur_pos += 1
+    
+    # return the how many digits has read, also the corresponding number
+    return cur_pos, output
+
+def decode_delta(inputs):# do not change the function heading
+    cur_pos = 0
+    output = []
+    
+    while cur_pos < len(inputs):  
+        temp_cur_pos, temp_output = read_one_number(inputs[cur_pos:])
+        cur_pos += temp_cur_pos
+        output.append(temp_output)
+
+    return output
+
+##### spliter, decode rice code #####
 
 def decode_rice(inputs, b):# do not change the heading of the function
     pass # **replace** this line with your code
