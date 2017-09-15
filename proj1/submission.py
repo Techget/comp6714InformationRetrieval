@@ -29,7 +29,14 @@ def gallop_to(a, val):# do not change the heading of the function
         count += 1
         # it comes to an end. but still smaller than val, return directly, the wrap function will deal with this
         if gallop_val == None:
-            return count
+            if a.data[-1] < val:           
+                return count
+            elif a.data[-1] == val:
+                a.cur = len(a.data) -1
+                return count
+            else:
+                a.cur = len(a.data) -1
+                break
         
         if gallop_val < val:
             a.next(val = inc)
@@ -37,7 +44,7 @@ def gallop_to(a, val):# do not change the heading of the function
             inc *= 2
         else:
             break
-    
+    # print("spliter ##########")
     ### if currently, a.data[cur] is equal to val, then we do not need to do BS
     if a.peek(cur_cur) == val:
         return count
@@ -69,7 +76,7 @@ def gallop_to(a, val):# do not change the heading of the function
     a.cur = cur_cur
     # print("execute to end, cur_cur: ", cur_cur)
     # print(a.cur)
-    return count    
+    return count     
 
 
 
@@ -82,7 +89,7 @@ def merge_two_list(l1, l2):
     data.sort()
     return data
 
-def Logarithmic_merge(index, cut_off, buffer_size): # do not change the heading of the function
+def Logarithmic_merge(index, cut_off, buffer_size): # do not change the function heading
     buffer = []
     output = []
     # highest_gen = 0
@@ -118,12 +125,34 @@ def Logarithmic_merge(index, cut_off, buffer_size): # do not change the heading 
         # clean up for next index
         buffer = [cur_index]
         
-    # last buffer still need to put into consideration
-    if buffer != []:
+    # last buffer still need to put into consideration, if buffer equal to buffer_size, should be merged, 
+    # else put in front of the ouptut list as Z0.
+    if len(buffer) >= buffer_size:
+        buffer.sort()
+        merge_flag = False
+        temp_gen = 0
+        while merge_flag == False:
+            if temp_gen >= len(output):
+                # means we need a new generation
+                output.append(buffer)
+                merge_flag = True
+            elif output[temp_gen] == []:
+                # this generation is empty put buffer here
+                output[temp_gen] = buffer
+                merge_flag = True
+            else:
+                # actually need to do merge
+                buffer = merge_two_list(buffer, output[temp_gen])
+                output[temp_gen] = []
+                temp_gen += 1
+        
+        # add empty Z0 to output list
+        output.insert(0,[])
+    elif buffer != []:
         output.insert(0, buffer)
     else:
         output.insert(0, [])
-
+        
     return output
 
 
