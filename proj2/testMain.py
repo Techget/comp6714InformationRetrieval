@@ -16,6 +16,9 @@ from six.moves.urllib.request import urlretrieve
 from sklearn.manifold import TSNE
 import gensim
 
+
+import pickle
+
 ### fixed parameters
 embedding_dim = 200
 number_of_iterations = 100001
@@ -34,6 +37,9 @@ logs_path = './log/'
 sample_size = 20       # Random sample of words to evaluate similarity.
 sample_window = 100    # Only pick samples in the head of the distribution.
 sample_examples = np.random.choice(sample_window, sample_size, replace=False) # Randomly pick a sample of size 16
+
+
+global data, count, dictionary, reverse_dictionary
 
 
 def tokenizeText(corpus):
@@ -131,6 +137,10 @@ def generate_batch(batch_size, num_samples, skip_window):
 
 
 def process_data(input_data_dir):
+    if os.path.exists('processed_data.pkl'):
+        with open("processed_data.pkl", "rb") as fp:   # Unpickling
+            return pickle.load(fp)
+
     data = ''
     with zipfile.ZipFile(input_data_dir) as zipf:
         # data = tf.compat.as_str(f.read(f.namelist()[0])).split()
@@ -140,10 +150,15 @@ def process_data(input_data_dir):
     print(data[:10], len(data))
 
     data = tokenizeText(''.join(data))
+
+    with open("processed_data.pkl", "wb") as fp:   #Pickling
+        pickle.dump(data, fp)
+
     return data
 
 
 def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_dim):
+    global data, count, dictionary, reverse_dictionary
     data, count, dictionary, reverse_dictionary = build_dataset(data_file, vocabulary_size)
 
     ## Constructing the graph...
@@ -160,12 +175,12 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
             # Look up embeddings for inputs.
             with tf.name_scope('Embeddings'):            
                 sample_dataset = tf.constant(sample_examples, dtype=tf.int32)
-                embeddings = tf.Variable(tf.random_uniform([vocabulary_size, embedding_size], -1.0, 1.0))
+                embeddings = tf.Variable(tf.random_uniform([vocabulary_size, embedding_dim], -1.0, 1.0))
                 embed = tf.nn.embedding_lookup(embeddings, train_inputs)
                 
                 # Construct the variables for the NCE loss
-                nce_weights = tf.Variable(tf.truncated_normal([vocabulary_size, embedding_size],
-                                                          stddev=1.0 / math.sqrt(embedding_size)))
+                nce_weights = tf.Variable(tf.truncated_normal([vocabulary_size, embedding_dim],
+                                                          stddev=1.0 / math.sqrt(embedding_dim)))
                 nce_biases = tf.Variable(tf.zeros([vocabulary_size]))
             
             # Compute the average NCE loss for the batch.
