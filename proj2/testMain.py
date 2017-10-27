@@ -19,20 +19,22 @@ import pickle
 import re
 from scipy.spatial import KDTree
 
+import time
+
 ### fixed parameters
 embedding_dim = 200
 number_of_iterations = 100001
 # Loss function, optimizer
 
 ### Tunable parameter
-vocabulary_size = 20000
+vocabulary_size = 17000
 batch_size = 128      # Size of mini-batch for skip-gram model..
 # 1
 skip_window = 5       # How many words to consider left and right of the target word.
 # 2
 num_samples = 4         # How many times to reuse an input to generate a label.
-num_sampled_ns = 64        # How many negative samples going to be chose
-learning_rate = 0.001
+num_sampled_ns = 1024        # How many negative samples going to be chose
+learning_rate = 0.0025
 
 logs_path = './log/'
 
@@ -84,12 +86,10 @@ def build_dataset(words, n_words):
         data.append(index)
     count[0][1] = unk_count
     reversed_dictionary = dict(zip(dictionary.values(), dictionary.keys()))
-    # print('#####',reversed_dictionary[7],'#####')
     return data, count, dictionary, reversed_dictionary
 
 
 # def is_keep_as_context(word):
-
 
 # used in generate_batch
 data_index = 0
@@ -108,25 +108,31 @@ def generate_batch(batch_size, num_samples, skip_window):
         data_index = 0
     buffer.extend(data_filled_with_num[data_index:data_index + span]) # initial buffer content = first sliding window
 
-    # print('data_index = {}, buffer = {}'.format(data_index, [reverse_dictionary[w] for w in buffer]))
     # try:
     #     print('generate batch data_index = {}, buffer = {}'.format(data_index, [reverse_dictionary[w] for w in buffer]))
     # except UnicodeEncodeError:
     #     print('UnicodeEncodeError')
 
-    RIGHT_BOUND = len(data_filled_with_num) - span
+    RIGHT_BOUND = len(data_filled_with_num) - span - 1
     data_index += span
     for i in range(batch_size // num_samples):
-        # parser = English()
         # tokens = parser(reverse_dictionary[data_filled_with_num[data_index + skip_window]])
         # while tokens[0].pos_ != 'ADJ':
         #     data_index += 1
         #     if data_index == RIGHT_BOUND:
         #         data_index = 0
-
         #     tokens = parser(reverse_dictionary[data_filled_with_num[data_index + skip_window]])
-
         # buffer.extend(data_filled_with_num[data_index:data_index + span])
+
+        # do not use UNK as context word
+        # print('out:', reverse_dictionary[data_filled_with_num[data_index + skip_window]])
+        while reverse_dictionary[buffer[skip_window]] == 'UNK' or parser(reverse_dictionary[buffer[skip_window]])[0].is_stop:
+            if data_index >= RIGHT_BOUND:
+                data_index = span
+                buffer.extend(data_filled_with_num[:span])
+
+            data_index += 1
+            buffer.append(data_filled_with_num[data_index + span])
 
         context_words = [w for w in range(span) if w != skip_window]
         random.shuffle(context_words)
@@ -138,18 +144,25 @@ def generate_batch(batch_size, num_samples, skip_window):
             context_word = words_to_use.pop()
             if len(words_to_use) == 1 and j < num_samples:
                 words_to_use.extend([w for w in range(span) if w != skip_window])
-
-            # 5% chance to have stop word as context word
-            if parser(reverse_dictionary[buffer[context_word]])[0].is_stop and random.uniform(0, 1) < 0.95:
+            # 5% chance to have UNK as context word
+            if reverse_dictionary[buffer[context_word]] == 'UNK' and random.uniform(0, 1) < 0.95:
+                continue
+            # 15% chance to have stop word as context word
+            if parser(reverse_dictionary[buffer[context_word]])[0].is_stop and random.uniform(0, 1) < 0.85:
                 continue
 
             batch[i * num_samples + j] = buffer[skip_window]
             labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
             j += 1
 
+            # try:
+            #     print('({} {})'.format(reverse_dictionary[buffer[skip_window]], reverse_dictionary[buffer[context_word]]))
+            # except UnicodeEncodeError:
+            #     print('UnicodeEncodeError')
+
         # slide the window to the next position
         if data_index == len(data_filled_with_num):
-            buffer = data_filled_with_num[:span]
+            buffer.extend(data_filled_with_num[:span])
             data_index = span
         else:
             buffer.append(data_filled_with_num[data_index]) # note that due to the size limit, the left most word is automatically removed from the buffer.
@@ -159,6 +172,15 @@ def generate_batch(batch_size, num_samples, skip_window):
     data_index = (data_index + len(data_filled_with_num) - span) % len(data_filled_with_num) # move data_index back by `span`
     return batch, labels
 
+
+def write_embedding_to_file(final_embeddings, embeddings_file_name):
+    global dictionary, reverse_dictionary
+
+    with open(embeddings_file_name, 'w') as f:
+        f.write('{} {}\n'.format(vocabulary_size,embedding_dim))
+        for index in reverse_dictionary.keys():
+            f.write('{} {}\n'.format(reverse_dictionary[index], ' '.join(str(e) for e in final_embeddings[index])))
+        f.close()
 
 
 def process_data(input_data_dir):
@@ -232,7 +254,7 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
 
         # Construct the Gradient Descent optimizer using a learning rate of 0.01.
         with tf.name_scope('Gradient_Descent'):
-            optimizer = tf.train. AdamOptimizer(learning_rate = learning_rate).minimize(loss)
+            optimizer = tf.train.AdamOptimizer(learning_rate = learning_rate).minimize(loss)
 
         # Normalize the embeddings to avoid overfitting.
         with tf.name_scope('Normalization'):
@@ -295,8 +317,8 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
                         print('UnicodeEncodeError:')
                 print()
 
-    final_embeddings = normalized_embeddings.eval()
-    gensim.models.KeyedVectors.save_word2vec_format(embeddings_file_name, binary=False)
+        final_embeddings = normalized_embeddings.eval()
+        write_embedding_to_file(final_embeddings, embeddings_file_name)
 
 
 def Compute_topk(model_file, input_adjective, top_k):
@@ -304,21 +326,28 @@ def Compute_topk(model_file, input_adjective, top_k):
 
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
-    tree = KDTree(model, leafsize=vocabulary_size + 1)
+    # print(model.n_similar(positive=[input_adjective], topn= top_k))
+
+    # print(model[:5])
+
+    # tree = KDTree(model, leafsize=vocabulary_size + 1)
 
     output = []
-    tword_token = parser(input_adjective)
+    tword_token = parser(input_adjective)[0]
     temp_topk_multiplier = 1
-    distances, ndx = tree.query(dictionary[input_adjective], k = top_k * temp_topk_multiplier)
+    # distances, ndx = tree.query(dictionary[input_adjective], k = top_k * temp_topk_multiplier)
+    temp_result = model.most_similar(positive=[input_adjective], topn= top_k * temp_topk_multiplier)
+    words = [r[0] for r in temp_result]
 
     while len(output) < top_k:
-        for index in ndx:
-            if parser(reverse_dictionary[index])[0].pos_ == tword_token.pos_:
-                output.append(tword)
+        for word in words:
+            if parser(word)[0].pos_ == tword_token.pos_:
+                output.append(word)
         if len(output) < top_k:
             temp_topk_multiplier += 1
-            distances, ndx = tree.query(dictionary[tword], k=top_k * temp_topk_multiplier)
-            ndx = ndx[top_k * (temp_topk_multiplier -1) :]
+            temp_result = model.most_similar(positive=[input_adjective], topn= top_k * temp_topk_multiplier)
+            words = [r[0] for r in temp_result]
+            words = words[top_k * (temp_topk_multiplier -1) :]
 
     return output[:top_k]
 
@@ -327,8 +356,8 @@ if __name__ == "__main__":
     data = process_data('./BBC_Data.zip')
     model_file = 'adjective_embeddings.txt'
     adjective_embeddings(data, model_file, number_of_iterations, embedding_dim)
-    input_adjective = 'bad'
+    # input_adjective = 'bad'
     top_k = 5
     test_words = ['able', 'average', 'bad', 'best', 'big', 'certain', 'common', 'current', 'different', 'difficult', 'early', 'extra', 'fair', 'few', 'final', 'former', 'great', 'hard', 'high', 'huge', 'important', 'key', 'large', 'last', 'less', 'likely', 'little', 'major', 'more', 'most', 'much', 'new', 'next', 'old', 'prime', 'real', 'recent', 'same', 'serious', 'short', 'small', 'top', 'tough', 'wide']
     for tword in test_words:
-        Compute_topk(model_file, tword, top_k)
+        print(tword, ': ',Compute_topk(model_file, tword, top_k))
