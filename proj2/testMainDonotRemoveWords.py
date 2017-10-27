@@ -55,13 +55,16 @@ def tokenizeText(corpus):
     important_pos = ['ADJ', 'VERB', 'NOUN', 'ADV']
     lemmas = []
     for tok in tokens:
-        if tok.pos_ in important_pos:
-            lemmas.append(tok)
-        elif tok.ent_type_ != "":
+        if tok.ent_type_ != "":
+            ###### may consider do lemmas.append("-"+tok.ent_type_+"-")
             continue
+        elif tok.pos_ in important_pos:
+            lemmas.append(tok.orth_.lower())
         else:
-            lemmas.append(tok.lemma_.lower().strip() if tok.lemma_ != "-PRON-" else tok.lower_)
+            lemmas.append(tok.lemma_.lower().strip() if tok.lemma_ != "-PRON-" else "-PRON-")
     tokens = lemmas
+
+    # print(tokens)
 
     # punctuation symbols, and pick out only words
     tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS and re.match('^[a-zA-Z]+$', tok) != None]
@@ -126,7 +129,7 @@ def generate_batch(batch_size, num_samples, skip_window):
     RIGHT_BOUND = len(data_filled_with_num) - span - 1
     data_index += span
     for i in range(batch_size // num_samples):
-        while reverse_dictionary[buffer[skip_window]] == 'UNK' or parser(reverse_dictionary[buffer[skip_window]])[0].is_stop:
+        while (reverse_dictionary[buffer[skip_window]] == 'UNK' or parser(reverse_dictionary[buffer[skip_window]])[0].is_stop) and random.uniform(0, 1) < 0.85:
             if data_index >= RIGHT_BOUND:
                 data_index = span
                 buffer.extend(data_filled_with_num[:span])
