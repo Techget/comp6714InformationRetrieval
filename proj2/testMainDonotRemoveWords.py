@@ -17,6 +17,7 @@ import gensim
 import pickle
 
 import re
+import math
 from scipy.spatial import KDTree
 
 import time
@@ -27,21 +28,20 @@ number_of_iterations = 100001
 # Loss function, optimizer
 
 ### Tunable parameter
-vocabulary_size = 15000
+vocabulary_size = 13000
 batch_size = 128      # Size of mini-batch for skip-gram model..
 # 1
-skip_window = 2       # How many words to consider left and right of the target word.
+skip_window = 4       # How many words to consider left and right of the target word.
 # 2
 num_samples = 4         # How many times to reuse an input to generate a label.
-num_sampled_ns = 1700        # How many negative samples going to be chose
+num_sampled_ns = 30        # How many negative samples going to be chose, as suggested 10~30 for small dataset
 learning_rate = 0.0025
 
 logs_path = './log/'
 
-
-global data_filled_with_num, count, dictionary, reverse_dictionary
+global data_filled_with_num, counter, dictionary, reverse_dictionary
 global parser
-
+global total_word_count
 
 def tokenizeText(corpus):
     global parser
@@ -77,10 +77,13 @@ def build_dataset(words, n_words):
        words: a list of words, i.e., the input data
        n_words: Vocab_size to limit the size of the vocabulary. Other words will be mapped to 'UNK'
     """
-    count = [['UNK', -1]]
-    count.extend(collections.Counter(words).most_common(n_words - 1))
+    global total_word_count
+    total_word_count = len(words)
+
+    counter = [['UNK', -1]]
+    counter.extend(collections.Counter(words).most_common(n_words - 1))
     dictionary = dict()
-    for word, _ in count:
+    for word, _ in counter:
         dictionary[word] = len(dictionary)
     data = list()
     unk_count = 0
@@ -89,18 +92,23 @@ def build_dataset(words, n_words):
         if index == 0:  # i.e., one of the 'UNK' words
             unk_count += 1
         data.append(index)
-    count[0][1] = unk_count
+    counter[0][1] = unk_count
     reversed_dictionary = dict(zip(dictionary.values(), dictionary.keys()))
-    return data, count, dictionary, reversed_dictionary
+    return data, counter, dictionary, reversed_dictionary
 
 
-# def is_keep_as_context(word):
+def is_keep_as_context(word):
+    global total_word_count, counter
+    frequency = float(counter[word])/float(total_word_count)
+    prob = (math.sqrt(frequency/0.001) + 1) * (0.001/frequency)
+    return random.uniform(0,1) < prob ? True : False
+
 
 # used in generate_batch
 data_index = 0
 def generate_batch(batch_size, num_samples, skip_window):
     global data_index
-    global data_filled_with_num, count, dictionary, reverse_dictionary, parser
+    global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
     assert batch_size % num_samples == 0
     assert num_samples <= 2 * skip_window
@@ -121,16 +129,6 @@ def generate_batch(batch_size, num_samples, skip_window):
     RIGHT_BOUND = len(data_filled_with_num) - span - 1
     data_index += span
     for i in range(batch_size // num_samples):
-        # tokens = parser(reverse_dictionary[data_filled_with_num[data_index + skip_window]])
-        # while tokens[0].pos_ != 'ADJ':
-        #     data_index += 1
-        #     if data_index == RIGHT_BOUND:
-        #         data_index = 0
-        #     tokens = parser(reverse_dictionary[data_filled_with_num[data_index + skip_window]])
-        # buffer.extend(data_filled_with_num[data_index:data_index + span])
-
-        # do not use UNK as context word
-        # print('out:', reverse_dictionary[data_filled_with_num[data_index + skip_window]])
         while (reverse_dictionary[buffer[skip_window]] == 'UNK' or parser(reverse_dictionary[buffer[skip_window]])[0].is_stop) and random.uniform(0, 1) < 0.85:
             if data_index >= RIGHT_BOUND:
                 data_index = span
@@ -143,27 +141,15 @@ def generate_batch(batch_size, num_samples, skip_window):
         random.shuffle(context_words)
         words_to_use = collections.deque(context_words) # now we obtain a random list of context words
 
-        # for j in range(num_samples): # generate the training pairs
         j = 0
         while j < num_samples:
             context_word = words_to_use.pop()
             if len(words_to_use) == 1 and j < num_samples:
                 words_to_use.extend([w for w in range(span) if w != skip_window])
-            # 5% chance to have UNK as context word
-            # if reverse_dictionary[buffer[context_word]] == 'UNK' and random.uniform(0, 1) < 0.95:
-            #     continue
-            # # 15% chance to have stop word as context word
-            # if parser(reverse_dictionary[buffer[context_word]])[0].is_stop and random.uniform(0, 1) < 0.85:
-            #     continue
-
-            batch[i * num_samples + j] = buffer[skip_window]
-            labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
-            j += 1
-
-            # try:
-            #     print('({} {})'.format(reverse_dictionary[buffer[skip_window]], reverse_dictionary[buffer[context_word]]))
-            # except UnicodeEncodeError:
-            #     print('UnicodeEncodeError')
+            if is_keep_as_context(reverse_dictionary[buffer[context_word]]):
+                batch[i * num_samples + j] = buffer[skip_window]
+                labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
+                j += 1
 
         # slide the window to the next position
         if data_index == len(data_filled_with_num):
@@ -214,8 +200,8 @@ def process_data(input_data_dir):
 
 
 def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_dim):
-    global data_filled_with_num, count, dictionary, reverse_dictionary
-    data_filled_with_num, count, dictionary, reverse_dictionary = build_dataset(data_file, vocabulary_size)
+    global data_filled_with_num, counter, dictionary, reverse_dictionary
+    data_filled_with_num, counter, dictionary, reverse_dictionary = build_dataset(data_file, vocabulary_size)
 
     test_words = ['able', 'average', 'bad', 'best', 'big', 'certain', 'common', 'current', 'different', 'difficult', 'early', 'extra', 'fair', 'few', 'final', 'former', 'great', 'hard', 'high', 'huge', 'important', 'key', 'large', 'last', 'less', 'likely', 'little', 'major', 'more', 'most', 'much', 'new', 'next', 'old', 'prime', 'real', 'recent', 'same', 'serious', 'short', 'small', 'top', 'tough', 'wide']
     # Specification of test Sample:
@@ -327,15 +313,9 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
 
 
 def Compute_topk(model_file, input_adjective, top_k):
-    global data_filled_with_num, count, dictionary, reverse_dictionary, parser
+    global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
-
-    # print(model.n_similar(positive=[input_adjective], topn= top_k))
-
-    # print(model[:5])
-
-    # tree = KDTree(model, leafsize=vocabulary_size + 1)
 
     output = []
     tword_token = parser(input_adjective)[0]
