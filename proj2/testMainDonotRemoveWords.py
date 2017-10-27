@@ -52,6 +52,7 @@ def tokenizeText(corpus):
     PUNC_SYMBOLS = " ".join(string.punctuation).split(" ") + ["-----", "---", "...", "“", "”", "'ve"]
 
     # lemmatize
+    # 'VERB', 'NOUN', 'ADV', consider only use ADJ
     important_pos = ['ADJ', 'VERB', 'NOUN', 'ADV']
     lemmas = []
     for tok in tokens:
@@ -99,9 +100,16 @@ def build_dataset(words, n_words):
 
 def is_keep_as_context(word):
     global total_word_count, counter
-    frequency = float(counter[word])/float(total_word_count)
+    # index = dictionary.get(word, 0)
+    # print(word)
+    # print(counter)
+    # print(counter[dictionary[word]][1])
+    frequency = float(counter[dictionary[word]][1])/float(total_word_count)
     prob = (math.sqrt(frequency/0.001) + 1) * (0.001/frequency)
-    return random.uniform(0,1) < prob ? True : False
+    if random.uniform(0,1) < prob:
+        return True
+    else:
+        return False
 
 
 # used in generate_batch
