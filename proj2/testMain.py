@@ -7,7 +7,6 @@ import os
 import random
 from tempfile import gettempdir
 import zipfile
-
 import numpy as np
 from six.moves import urllib
 import tensorflow as tf
@@ -15,9 +14,10 @@ from six.moves import range
 from six.moves.urllib.request import urlretrieve
 from sklearn.manifold import TSNE
 import gensim
-
-
 import pickle
+
+import re
+from scipy.spatial import KDTree
 
 ### fixed parameters
 embedding_dim = 200
@@ -27,54 +27,46 @@ number_of_iterations = 100001
 ### Tunable parameter
 vocabulary_size = 20000
 batch_size = 128      # Size of mini-batch for skip-gram model..
-skip_window = 1       # How many words to consider left and right of the target word.
-num_samples = 2         # How many times to reuse an input to generate a label.
-num_sampled = 64        # How many negative samples going to be chose
+# 1
+skip_window = 5       # How many words to consider left and right of the target word.
+# 2
+num_samples = 4         # How many times to reuse an input to generate a label.
+num_sampled_ns = 64        # How many negative samples going to be chose
 learning_rate = 0.001
 
 logs_path = './log/'
-# Specification of test Sample:
-sample_size = 20       # Random sample of words to evaluate similarity.
-sample_window = 100    # Only pick samples in the head of the distribution.
-sample_examples = np.random.choice(sample_window, sample_size, replace=False) # Randomly pick a sample of size 16
 
 
-global data, count, dictionary, reverse_dictionary
+global data_filled_with_num, count, dictionary, reverse_dictionary
+global parser
 
 
 def tokenizeText(corpus):
+    global parser
     parser = English()
     # get the tokens using spaCy
     tokens = parser(corpus)
 
-    SYMBOLS = " ".join(string.punctuation).split(" ") + ["-----", "---", "...", "“", "”", "'ve"]
+    PUNC_SYMBOLS = " ".join(string.punctuation).split(" ") + ["-----", "---", "...", "“", "”", "'ve"]
 
-    # # lemmatize
-    # lemmas = []
-    # for tok in tokens:
-    #     lemmas.append(tok.lemma_.lower().strip() if tok.lemma_ != "-PRON-" else tok.lower_)
-    # tokens = lemmas
+    temp = []
+    skip_pos = ['NUM', 'SYM', 'PUNCT']
+    skip_ent_type = ['PERSON', 'DATE', 'EVENT', 'PERCENT', 'TIME']
 
-    # # stoplist the tokens
-    # tokens = [tok for tok in tokens if tok not in STOPLIST]
+    for tok in tokens:
+        if tok.pos_ in skip_pos or tok.ent_type_ in skip_ent_type:
+            continue
+        temp.append(tok.orth_.lower().strip())
+    tokens = temp
 
-    # stoplist symbols
-    tokens = [tok.lower_ for tok in tokens if tok.orth_ not in SYMBOLS]
+    # punctuation symbols, and pick out only words
+    tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS and re.match('^[a-zA-Z]+$', tok) != None]
 
-    # remove large strings of whitespace
-    while "" in tokens:
-        tokens.remove("")
-    while " " in tokens:
-        tokens.remove(" ")
-    while "\n" in tokens:
-        tokens.remove("\n")
-    while "\n\n" in tokens:
-        tokens.remove("\n\n")
-
+    print(tokens[:100])
     return tokens
 
 def build_dataset(words, n_words):
-    """Process raw inputs into a dataset. 
+    """Process raw inputs into a dataset.
        words: a list of words, i.e., the input data
        n_words: Vocab_size to limit the size of the vocabulary. Other words will be mapped to 'UNK'
     """
@@ -92,53 +84,88 @@ def build_dataset(words, n_words):
         data.append(index)
     count[0][1] = unk_count
     reversed_dictionary = dict(zip(dictionary.values(), dictionary.keys()))
+    # print('#####',reversed_dictionary[7],'#####')
     return data, count, dictionary, reversed_dictionary
 
+
+# def is_keep_as_context(word):
+
+
+# used in generate_batch
 data_index = 0
 def generate_batch(batch_size, num_samples, skip_window):
-    global data_index   
-    
+    global data_index
+    global data_filled_with_num, count, dictionary, reverse_dictionary, parser
+
     assert batch_size % num_samples == 0
     assert num_samples <= 2 * skip_window
-    
+
     batch = np.ndarray(shape=(batch_size), dtype=np.int32)
     labels = np.ndarray(shape=(batch_size, 1), dtype=np.int32)
     span = 2 * skip_window + 1  # span is the width of the sliding window
     buffer = collections.deque(maxlen=span)
-    if data_index + span > len(data):
+    if data_index + span > len(data_filled_with_num):
         data_index = 0
-    buffer.extend(data[data_index:data_index + span]) # initial buffer content = first sliding window
-    
-    print('data_index = {}, buffer = {}'.format(data_index, [reverse_dictionary[w] for w in buffer]))
+    buffer.extend(data_filled_with_num[data_index:data_index + span]) # initial buffer content = first sliding window
 
+    # print('data_index = {}, buffer = {}'.format(data_index, [reverse_dictionary[w] for w in buffer]))
+    # try:
+    #     print('generate batch data_index = {}, buffer = {}'.format(data_index, [reverse_dictionary[w] for w in buffer]))
+    # except UnicodeEncodeError:
+    #     print('UnicodeEncodeError')
+
+    RIGHT_BOUND = len(data_filled_with_num) - span
     data_index += span
     for i in range(batch_size // num_samples):
+        # parser = English()
+        # tokens = parser(reverse_dictionary[data_filled_with_num[data_index + skip_window]])
+        # while tokens[0].pos_ != 'ADJ':
+        #     data_index += 1
+        #     if data_index == RIGHT_BOUND:
+        #         data_index = 0
+
+        #     tokens = parser(reverse_dictionary[data_filled_with_num[data_index + skip_window]])
+
+        # buffer.extend(data_filled_with_num[data_index:data_index + span])
+
         context_words = [w for w in range(span) if w != skip_window]
         random.shuffle(context_words)
         words_to_use = collections.deque(context_words) # now we obtain a random list of context words
-        for j in range(num_samples): # generate the training pairs
-            batch[i * num_samples + j] = buffer[skip_window]
+
+        # for j in range(num_samples): # generate the training pairs
+        j = 0
+        while j < num_samples:
             context_word = words_to_use.pop()
+            if len(words_to_use) == 1 and j < num_samples:
+                words_to_use.extend([w for w in range(span) if w != skip_window])
+
+            # 5% chance to have stop word as context word
+            if parser(reverse_dictionary[buffer[context_word]])[0].is_stop and random.uniform(0, 1) < 0.95:
+                continue
+
+            batch[i * num_samples + j] = buffer[skip_window]
             labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
-        
-        # slide the window to the next position    
-        if data_index == len(data):
-            buffer = data[:span]
+            j += 1
+
+        # slide the window to the next position
+        if data_index == len(data_filled_with_num):
+            buffer = data_filled_with_num[:span]
             data_index = span
-        else: 
-            buffer.append(data[data_index]) # note that due to the size limit, the left most word is automatically removed from the buffer.
+        else:
+            buffer.append(data_filled_with_num[data_index]) # note that due to the size limit, the left most word is automatically removed from the buffer.
             data_index += 1
-        
-        print('data_index = {}, buffer = {}'.format(data_index, [reverse_dictionary[w] for w in buffer]))
-        
+
     # end-of-for
-    data_index = (data_index + len(data) - span) % len(data) # move data_index back by `span`
+    data_index = (data_index + len(data_filled_with_num) - span) % len(data_filled_with_num) # move data_index back by `span`
     return batch, labels
+
 
 
 def process_data(input_data_dir):
     if os.path.exists('processed_data.pkl'):
         with open("processed_data.pkl", "rb") as fp:   # Unpickling
+            global parser
+            parser = English()
             return pickle.load(fp)
 
     data = ''
@@ -147,93 +174,106 @@ def process_data(input_data_dir):
         for f in zipf.namelist():
             data += tf.compat.as_str(zipf.read(f)) + ' '
 
-    print(data[:10], len(data))
+    # print(data[:10], len(data))
 
-    data = tokenizeText(''.join(data))
+    data = tokenizeText(data)
 
     with open("processed_data.pkl", "wb") as fp:   #Pickling
         pickle.dump(data, fp)
+
+    print(len(data))
 
     return data
 
 
 def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_dim):
-    global data, count, dictionary, reverse_dictionary
-    data, count, dictionary, reverse_dictionary = build_dataset(data_file, vocabulary_size)
+    global data_filled_with_num, count, dictionary, reverse_dictionary
+    data_filled_with_num, count, dictionary, reverse_dictionary = build_dataset(data_file, vocabulary_size)
+
+    test_words = ['able', 'average', 'bad', 'best', 'big', 'certain', 'common', 'current', 'different', 'difficult', 'early', 'extra', 'fair', 'few', 'final', 'former', 'great', 'hard', 'high', 'huge', 'important', 'key', 'large', 'last', 'less', 'likely', 'little', 'major', 'more', 'most', 'much', 'new', 'next', 'old', 'prime', 'real', 'recent', 'same', 'serious', 'short', 'small', 'top', 'tough', 'wide']
+    # Specification of test Sample:
+    sample_size = len(test_words)       # Random sample of words to evaluate similarity.
+    sample_window = 100    # Only pick samples in the head of the distribution.
+    sample_examples = []
+
+    for tword in test_words:
+        sample_examples.append(dictionary[tword])
+
 
     ## Constructing the graph...
     graph = tf.Graph()
 
     with graph.as_default():
-        
-        with tf.device('/cpu:0'):
-            # Placeholders to read input data.
-            with tf.name_scope('Inputs'):
-                train_inputs = tf.placeholder(tf.int32, shape=[batch_size])
-                train_labels = tf.placeholder(tf.int32, shape=[batch_size, 1])
-                
-            # Look up embeddings for inputs.
-            with tf.name_scope('Embeddings'):            
-                sample_dataset = tf.constant(sample_examples, dtype=tf.int32)
-                embeddings = tf.Variable(tf.random_uniform([vocabulary_size, embedding_dim], -1.0, 1.0))
-                embed = tf.nn.embedding_lookup(embeddings, train_inputs)
-                
-                # Construct the variables for the NCE loss
-                nce_weights = tf.Variable(tf.truncated_normal([vocabulary_size, embedding_dim],
-                                                          stddev=1.0 / math.sqrt(embedding_dim)))
-                nce_biases = tf.Variable(tf.zeros([vocabulary_size]))
-            
-            # Compute the average NCE loss for the batch.
-            # tf.nce_loss automatically draws a new sample of the negative labels each
-            # time we evaluate the loss.
-            with tf.name_scope('Loss'):
-                loss = tf.reduce_mean(tf.nn.sampled_softmax_loss(weights=nce_weights, biases=nce_biases, 
-                                                 labels=train_labels, inputs=embed, 
-                                                 num_sampled=num_sampled, num_classes=vocabulary_size))
-            
-            # Construct the Gradient Descent optimizer using a learning rate of 0.01.
-            with tf.name_scope('Gradient_Descent'):
-                optimizer = tf.train. AdamOptimizer(learning_rate = learning_rate).minimize(loss)
 
-            # Normalize the embeddings to avoid overfitting.
-            with tf.name_scope('Normalization'):
-                norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keep_dims=True))
-                normalized_embeddings = embeddings / norm
-                
-            sample_embeddings = tf.nn.embedding_lookup(normalized_embeddings, sample_dataset)
-            similarity = tf.matmul(sample_embeddings, normalized_embeddings, transpose_b=True)
-            
-            # Add variable initializer.
-            init = tf.global_variables_initializer()
-            
-            
-            # Create a summary to monitor cost tensor
-            tf.summary.scalar("cost", loss)
-            # Merge all summary variables.
-            merged_summary_op = tf.summary.merge_all()
+        # with tf.device('/cpu:0'):
+        # Placeholders to read input data.
+        with tf.name_scope('Inputs'):
+            train_inputs = tf.placeholder(tf.int32, shape=[batch_size])
+            train_labels = tf.placeholder(tf.int32, shape=[batch_size, 1])
+
+        # Look up embeddings for inputs.
+        with tf.name_scope('Embeddings'):
+            sample_dataset = tf.constant(sample_examples, dtype=tf.int32)
+            embeddings = tf.Variable(tf.random_uniform([vocabulary_size, embedding_dim], -1.0, 1.0))
+            embed = tf.nn.embedding_lookup(embeddings, train_inputs)
+
+            # Construct the variables for the NCE loss
+            nce_weights = tf.Variable(tf.truncated_normal([vocabulary_size, embedding_dim],
+                                                      stddev=1.0 / math.sqrt(embedding_dim)))
+            nce_biases = tf.Variable(tf.zeros([vocabulary_size]))
+
+        # Compute the average NCE loss for the batch.
+        # tf.nce_loss automatically draws a new sample of the negative labels each
+        # time we evaluate the loss.
+        with tf.name_scope('Loss'):
+            loss = tf.reduce_mean(tf.nn.sampled_softmax_loss(weights=nce_weights, biases=nce_biases,
+                                             labels=train_labels, inputs=embed,
+                                             num_sampled=num_sampled_ns, num_classes=vocabulary_size))
+
+        # Construct the Gradient Descent optimizer using a learning rate of 0.01.
+        with tf.name_scope('Gradient_Descent'):
+            optimizer = tf.train. AdamOptimizer(learning_rate = learning_rate).minimize(loss)
+
+        # Normalize the embeddings to avoid overfitting.
+        with tf.name_scope('Normalization'):
+            norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keep_dims=True))
+            normalized_embeddings = embeddings / norm
+
+        sample_embeddings = tf.nn.embedding_lookup(normalized_embeddings, sample_dataset)
+        similarity = tf.matmul(sample_embeddings, normalized_embeddings, transpose_b=True)
+
+        # Add variable initializer.
+        init = tf.global_variables_initializer()
+
+
+        # Create a summary to monitor cost tensor
+        tf.summary.scalar("cost", loss)
+        # Merge all summary variables.
+        merged_summary_op = tf.summary.merge_all()
 
     with tf.Session(graph=graph) as session:
         # We must initialize all variables before we use them.
         session.run(init)
         summary_writer = tf.summary.FileWriter(logs_path, graph=tf.get_default_graph())
-        
+
         print('Initializing the model')
-        
+
         average_loss = 0
         for step in range(num_steps):
+            # print('step: ', step)
             batch_inputs, batch_labels = generate_batch(batch_size, num_samples, skip_window)
             feed_dict = {train_inputs: batch_inputs, train_labels: batch_labels}
-            
+
             # We perform one update step by evaluating the optimizer op using session.run()
             _, loss_val, summary = session.run([optimizer, loss, merged_summary_op], feed_dict=feed_dict)
-            
+
             summary_writer.add_summary(summary, step )
             average_loss += loss_val
 
             if step % 5000 == 0:
                 if step > 0:
                     average_loss /= 5000
-                
+
                     # The average loss is an estimate of the loss over the last 5000 batches.
                     print('Average loss at step ', step, ': ', average_loss)
                     average_loss = 0
@@ -249,29 +289,46 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
                     for k in range(top_k):
                         close_word = reverse_dictionary[nearest[k]]
                         log_str = '%s %s,' % (log_str, close_word)
-                    print(log_str)
+                    try:
+                        print(log_str)
+                    except UnicodeEncodeError:
+                        print('UnicodeEncodeError:')
                 print()
 
-    final_embeddings = normalized_embeddings.eval() 
-    i = 0
-    for word in dictionary.keys():
-        final_embeddings[i] = final_embeddings[i].insert(0, word)
-
+    final_embeddings = normalized_embeddings.eval()
     gensim.models.KeyedVectors.save_word2vec_format(embeddings_file_name, binary=False)
 
 
 def Compute_topk(model_file, input_adjective, top_k):
-    model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
-    print(model[:10])
-    pass # to compute top_k words similar to input_adjective
+    global data_filled_with_num, count, dictionary, reverse_dictionary, parser
 
+    model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
+
+    tree = KDTree(model, leafsize=vocabulary_size + 1)
+
+    output = []
+    tword_token = parser(input_adjective)
+    temp_topk_multiplier = 1
+    distances, ndx = tree.query(dictionary[input_adjective], k = top_k * temp_topk_multiplier)
+
+    while len(output) < top_k:
+        for index in ndx:
+            if parser(reverse_dictionary[index])[0].pos_ == tword_token.pos_:
+                output.append(tword)
+        if len(output) < top_k:
+            temp_topk_multiplier += 1
+            distances, ndx = tree.query(dictionary[tword], k=top_k * temp_topk_multiplier)
+            ndx = ndx[top_k * (temp_topk_multiplier -1) :]
+
+    return output[:top_k]
 
 
 if __name__ == "__main__":
     data = process_data('./BBC_Data.zip')
-    print(data[:10])
     model_file = 'adjective_embeddings.txt'
     adjective_embeddings(data, model_file, number_of_iterations, embedding_dim)
     input_adjective = 'bad'
     top_k = 5
-    output = Compute_topk(model_file, input_adjective, top_k)
+    test_words = ['able', 'average', 'bad', 'best', 'big', 'certain', 'common', 'current', 'different', 'difficult', 'early', 'extra', 'fair', 'few', 'final', 'former', 'great', 'hard', 'high', 'huge', 'important', 'key', 'large', 'last', 'less', 'likely', 'little', 'major', 'more', 'most', 'much', 'new', 'next', 'old', 'prime', 'real', 'recent', 'same', 'serious', 'short', 'small', 'top', 'tough', 'wide']
+    for tword in test_words:
+        Compute_topk(model_file, tword, top_k)
