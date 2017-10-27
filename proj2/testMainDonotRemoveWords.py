@@ -27,13 +27,13 @@ number_of_iterations = 100001
 # Loss function, optimizer
 
 ### Tunable parameter
-vocabulary_size = 17000
+vocabulary_size = 15000
 batch_size = 128      # Size of mini-batch for skip-gram model..
 # 1
-skip_window = 5       # How many words to consider left and right of the target word.
+skip_window = 2       # How many words to consider left and right of the target word.
 # 2
 num_samples = 4         # How many times to reuse an input to generate a label.
-num_sampled_ns = 1024        # How many negative samples going to be chose
+num_sampled_ns = 1700        # How many negative samples going to be chose
 learning_rate = 0.0025
 
 logs_path = './log/'
@@ -55,13 +55,16 @@ def tokenizeText(corpus):
     important_pos = ['ADJ', 'VERB', 'NOUN', 'ADV']
     lemmas = []
     for tok in tokens:
-        if tok.pos_ in important_pos:
-            lemmas.append(tok)
-        elif tok.ent_type_ != "":
+        if tok.ent_type_ != "":
+            ###### may consider do lemmas.append("-"+tok.ent_type_+"-")
             continue
+        elif tok.pos_ in important_pos:
+            lemmas.append(tok.orth_.lower())
         else:
-            lemmas.append(tok.lemma_.lower().strip() if tok.lemma_ != "-PRON-" else tok.lower_)
+            lemmas.append(tok.lemma_.lower().strip() if tok.lemma_ != "-PRON-" else "-PRON-")
     tokens = lemmas
+
+    # print(tokens)
 
     # punctuation symbols, and pick out only words
     tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS and re.match('^[a-zA-Z]+$', tok) != None]
@@ -128,7 +131,7 @@ def generate_batch(batch_size, num_samples, skip_window):
 
         # do not use UNK as context word
         # print('out:', reverse_dictionary[data_filled_with_num[data_index + skip_window]])
-        while reverse_dictionary[buffer[skip_window]] == 'UNK' or parser(reverse_dictionary[buffer[skip_window]])[0].is_stop:
+        while (reverse_dictionary[buffer[skip_window]] == 'UNK' or parser(reverse_dictionary[buffer[skip_window]])[0].is_stop) and random.uniform(0, 1) < 0.85:
             if data_index >= RIGHT_BOUND:
                 data_index = span
                 buffer.extend(data_filled_with_num[:span])
@@ -147,11 +150,11 @@ def generate_batch(batch_size, num_samples, skip_window):
             if len(words_to_use) == 1 and j < num_samples:
                 words_to_use.extend([w for w in range(span) if w != skip_window])
             # 5% chance to have UNK as context word
-            if reverse_dictionary[buffer[context_word]] == 'UNK' and random.uniform(0, 1) < 0.95:
-                continue
-            # 15% chance to have stop word as context word
-            if parser(reverse_dictionary[buffer[context_word]])[0].is_stop and random.uniform(0, 1) < 0.85:
-                continue
+            # if reverse_dictionary[buffer[context_word]] == 'UNK' and random.uniform(0, 1) < 0.95:
+            #     continue
+            # # 15% chance to have stop word as context word
+            # if parser(reverse_dictionary[buffer[context_word]])[0].is_stop and random.uniform(0, 1) < 0.85:
+            #     continue
 
             batch[i * num_samples + j] = buffer[skip_window]
             labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
