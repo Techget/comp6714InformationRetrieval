@@ -34,8 +34,8 @@ batch_size = 128      # Size of mini-batch for skip-gram model..
 skip_window = 4       # How many words to consider left and right of the target word.
 # 2
 num_samples = 4         # How many times to reuse an input to generate a label.
-num_sampled_ns = 30        # How many negative samples going to be chose, as suggested 10~30 for small dataset
-learning_rate = 0.0025
+num_sampled_ns = 1700        # How many negative samples going to be chose, as suggested 10~30 for small dataset
+learning_rate = 0.003
 
 logs_path = './log/'
 
@@ -53,19 +53,23 @@ def tokenizeText(corpus):
 
     # lemmatize
     # 'VERB', 'NOUN', 'ADV', consider only use ADJ
-    important_pos = ['ADJ', 'VERB', 'NOUN', 'ADV']
+    important_pos = ['ADJ', 'NOUN']
     lemmas = []
     for tok in tokens:
         if tok.ent_type_ != "":
             ###### may consider do lemmas.append("-"+tok.ent_type_+"-")
+            print('tok.ent_type_: ', tok.ent_type_)
             continue
         elif tok.pos_ in important_pos:
             lemmas.append(tok.orth_.lower())
+        elif tok.pos_ == "PRON":
+            lemmas.append('PRON')
+        elif tok.pos_ == "CONJ":
+            lemmas.append('CONJ')
+            # maybe add 'PREP' later
         else:
-            lemmas.append(tok.lemma_.lower().strip() if tok.lemma_ != "-PRON-" else "-PRON-")
+            lemmas.append(tok.lemma_.lower().strip())
     tokens = lemmas
-
-    # print(tokens)
 
     # punctuation symbols, and pick out only words
     tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS and re.match('^[a-zA-Z]+$', tok) != None]
@@ -83,6 +87,8 @@ def build_dataset(words, n_words):
 
     counter = [['UNK', -1]]
     counter.extend(collections.Counter(words).most_common(n_words - 1))
+    print(len(counter))
+
     dictionary = dict()
     for word, _ in counter:
         dictionary[word] = len(dictionary)
@@ -137,7 +143,12 @@ def generate_batch(batch_size, num_samples, skip_window):
     RIGHT_BOUND = len(data_filled_with_num) - span - 1
     data_index += span
     for i in range(batch_size // num_samples):
-        while (reverse_dictionary[buffer[skip_window]] == 'UNK' or parser(reverse_dictionary[buffer[skip_window]])[0].is_stop) and random.uniform(0, 1) < 0.85:
+        # 15% to be center word
+        # sensitive_replace_word = ['UNK', 'PRON', 'CONJ']
+        # while (reverse_dictionary[buffer[skip_window]] in sensitive_replace_word or parser(reverse_dictionary[buffer[skip_window]])[0].is_stop) and random.uniform(0, 1) < 0.85:
+        
+        ## pick a proper center word
+        while is_keep_as_context(reverse_dictionary[buffer[skip_window]]) == False
             if data_index >= RIGHT_BOUND:
                 data_index = span
                 buffer.extend(data_filled_with_num[:span])
@@ -323,6 +334,8 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
 def Compute_topk(model_file, input_adjective, top_k):
     global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
+    sensitive_replace_word = ['UNK', 'PRON', 'CONJ']
+
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
     output = []
@@ -334,6 +347,8 @@ def Compute_topk(model_file, input_adjective, top_k):
 
     while len(output) < top_k:
         for word in words:
+            if word in sensitive_replace_word:
+                continue
             if parser(word)[0].pos_ == tword_token.pos_:
                 output.append(word)
         if len(output) < top_k:
