@@ -22,19 +22,23 @@ from scipy.spatial import KDTree
 
 import time
 
+
+
 ### fixed parameters
 embedding_dim = 200
 number_of_iterations = 100001
 # Loss function, optimizer
 
+# record 7000 128 8 8 512 0.003, result 2.715
+
 ### Tunable parameter
-vocabulary_size = 7000
+vocabulary_size = 6000
 batch_size = 128      # Size of mini-batch for skip-gram model..
 # 1
-skip_window = 8       # How many words to consider left and right of the target word.
+skip_window = 4       # How many words to consider left and right of the target word.
 # 2
-num_samples = 8         # How many times to reuse an input to generate a label.
-num_sampled_ns = 512        # How many negative samples going to be chose, as suggested 10~30 for small dataset
+num_samples = 4         # How many times to reuse an input to generate a label.
+num_sampled_ns = 32        # How many negative samples going to be chose, as suggested 10~30 for small dataset
 learning_rate = 0.003
 
 logs_path = './log/'
@@ -49,7 +53,7 @@ def tokenizeText(corpus):
     # get the tokens using spaCy
     tokens = parser(corpus)
 
-    PUNC_SYMBOLS = " ".join(string.punctuation).split(" ") + ["-----", "---", "...", "“", "”", "'ve"]
+    PUNC_SYMBOLS = " ".join(string.punctuation).split(" ") + ["-----", "---", "...", "“", "”", "'ve", " "]
 
     # lemmatize
     # 'VERB', 'NOUN', 'ADV', consider only use ADJ
@@ -61,7 +65,7 @@ def tokenizeText(corpus):
             # may consider do lemmas.append("-"+tok.ent_type_+"-")
             # print('tok.ent_type_: ', tok.ent_type_)
             lemmas.append("-"+tok.ent_type_+"-")
-            continue
+            # continue
         elif tok.pos_ == 'ADJ':
             lemmas.append(tok.orth_.lower()+'ADJ')
         elif tok.pos_ in useless_pos:
@@ -73,9 +77,15 @@ def tokenizeText(corpus):
 
     # punctuation symbols, and pick out only words
     # and re.match('^[a-zA-Z]+$', tok) != None
-    tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS ]
+    tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS and re.match('^[a-zA-Z\-]+$', tok) != None]
+    
+    # print(tokens[:100])
+    for tok in tokens[:100]:
+        try:
+            print(tok)
+        except UnicodeEncodeError:
+            print('UnicodeEncodeError')
 
-    print(tokens[:100])
     return tokens
 
 def build_dataset(words, n_words):
@@ -89,6 +99,7 @@ def build_dataset(words, n_words):
     counter = [['UNK', -1]]
     counter.extend(collections.Counter(words).most_common(n_words - 1))
     # print(len(counter))
+    print(counter[:n_words])
     assert len(counter) == n_words
 
     dictionary = dict()
@@ -220,13 +231,14 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
     global data_filled_with_num, counter, dictionary, reverse_dictionary
     data_filled_with_num, counter, dictionary, reverse_dictionary = build_dataset(data_file, vocabulary_size)
 
-    test_words = ['able', 'average', 'bad', 'best', 'big', 'certain', 'common', 'current', 'different', 'difficult', 'early', 'extra', 'fair', 'few', 'final', 'former', 'great', 'hard', 'high', 'huge', 'important', 'key', 'large', 'last', 'less', 'likely', 'little', 'major', 'more', 'most', 'much', 'new', 'next', 'old', 'prime', 'real', 'recent', 'same', 'serious', 'short', 'small', 'top', 'tough', 'wide']
+    test_words =['basic', 'big', 'chief', 'clear', 'confident', 'conservative', 'corporate', 'difficult', 'fair', 'famous', 'few', 'final', 'former', 'free', 'full', 'high', 'huge', 'interested', 'large', 'low', 'main', 'malicious', 'many', 'mobile', 'modern', 'more', 'much', 'old', 'private', 'ready', 'same', 'significant', 'single', 'special', 'specific', 'successful', 'top', 'vital', 'wide', 'worth'] 
     # Specification of test Sample:
     sample_size = len(test_words)       # Random sample of words to evaluate similarity.
     sample_window = 100    # Only pick samples in the head of the distribution.
     sample_examples = []
 
     for tword in test_words:
+        tword += 'ADJ'
         sample_examples.append(dictionary[tword])
 
 
@@ -338,10 +350,10 @@ def Compute_topk(model_file, input_adjective, top_k):
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
     output = []
-    tword_token = parser(input_adjective)[0]
-    temp_topk_multiplier = 1
+    # tword_token = parser(input_adjective)[0]
+    temp_topk_multiplier = 5
     # distances, ndx = tree.query(dictionary[input_adjective], k = top_k * temp_topk_multiplier)
-    temp_result = model.most_similar(positive=[input_adjective], topn= top_k * temp_topk_multiplier)
+    temp_result = model.most_similar(positive=[input_adjective + 'ADJ'], topn= top_k * temp_topk_multiplier)
     words = [r[0] for r in temp_result]
 
     while len(output) < top_k:
@@ -349,11 +361,19 @@ def Compute_topk(model_file, input_adjective, top_k):
             if word in sensitive_replace_word:
                 continue
             # if parser(word)[0].pos_ == tword_token.pos_:
-            if re.match('ADJ$', word) != None:
-                output.append(word)
+            # if re.match('ADJ', word) != None:
+            if word[-3:] == 'ADJ':
+                # print(word)
+                output.append(word[:-3])
+
+        if temp_topk_multiplier > 30:
+            break
+
         if len(output) < top_k:
+            # print(temp_topk_multiplier)
+            # print(len(output))
             temp_topk_multiplier += 1
-            temp_result = model.most_similar(positive=[input_adjective], topn= top_k * temp_topk_multiplier)
+            temp_result = model.most_similar(positive=[input_adjective + 'ADJ'], topn= top_k * temp_topk_multiplier)
             words = [r[0] for r in temp_result]
             words = words[top_k * (temp_topk_multiplier -1) :]
 
@@ -364,8 +384,35 @@ if __name__ == "__main__":
     data = process_data('./BBC_Data.zip')
     model_file = 'adjective_embeddings.txt'
     adjective_embeddings(data, model_file, number_of_iterations, embedding_dim)
-    # input_adjective = 'bad'
-    top_k = 50
-    test_words = ['able', 'average', 'bad', 'best', 'big', 'certain', 'common', 'current', 'different', 'difficult', 'early', 'extra', 'fair', 'few', 'final', 'former', 'great', 'hard', 'high', 'huge', 'important', 'key', 'large', 'last', 'less', 'likely', 'little', 'major', 'more', 'most', 'much', 'new', 'next', 'old', 'prime', 'real', 'recent', 'same', 'serious', 'short', 'small', 'top', 'tough', 'wide']
-    for tword in test_words:
-        print(tword, ': ',Compute_topk(model_file, tword, top_k))
+    top_k = 100
+
+    from os import listdir
+    from os.path import isfile, join
+
+    match_counter = 0
+    word_files = [f for f in listdir('dev_set/') if isfile(join('dev_set/', f))]
+
+    for wf in word_files:
+        computed_similar_words = Compute_topk(model_file, wf, top_k)
+        ground_truth_words = []
+        file = open(join('dev_set/', wf),'r')
+        i = 0
+        for w in file:
+            if i >= 100:
+                break
+            ground_truth_words.append(w.strip())  
+            i += 1
+
+        print('Matched nearest to ', wf, ': ', end= " ")
+
+        for csw in computed_similar_words:
+            if csw in ground_truth_words:
+                print(csw, " ", end=" ")
+                match_counter += 1
+
+        print("\n")
+
+    print('average hits: ', match_counter / len(word_files))
+
+    # for tword in test_words:
+    #     print(tword, ': ',Compute_topk(model_file, tword, top_k))
