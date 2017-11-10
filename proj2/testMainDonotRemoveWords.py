@@ -28,13 +28,13 @@ number_of_iterations = 100001
 # Loss function, optimizer
 
 ### Tunable parameter
-vocabulary_size = 13000
+vocabulary_size = 7000
 batch_size = 128      # Size of mini-batch for skip-gram model..
 # 1
-skip_window = 4       # How many words to consider left and right of the target word.
+skip_window = 8       # How many words to consider left and right of the target word.
 # 2
-num_samples = 4         # How many times to reuse an input to generate a label.
-num_sampled_ns = 1700        # How many negative samples going to be chose, as suggested 10~30 for small dataset
+num_samples = 8         # How many times to reuse an input to generate a label.
+num_sampled_ns = 512        # How many negative samples going to be chose, as suggested 10~30 for small dataset
 learning_rate = 0.003
 
 logs_path = './log/'
@@ -54,25 +54,26 @@ def tokenizeText(corpus):
     # lemmatize
     # 'VERB', 'NOUN', 'ADV', consider only use ADJ
     important_pos = ['ADJ', 'NOUN']
+    useless_pos = ['PRON', 'CONJ', 'PREP']
     lemmas = []
     for tok in tokens:
         if tok.ent_type_ != "":
-            ###### may consider do lemmas.append("-"+tok.ent_type_+"-")
-            print('tok.ent_type_: ', tok.ent_type_)
+            # may consider do lemmas.append("-"+tok.ent_type_+"-")
+            # print('tok.ent_type_: ', tok.ent_type_)
+            lemmas.append("-"+tok.ent_type_+"-")
             continue
-        elif tok.pos_ in important_pos:
-            lemmas.append(tok.orth_.lower())
-        elif tok.pos_ == "PRON":
-            lemmas.append('PRON')
-        elif tok.pos_ == "CONJ":
-            lemmas.append('CONJ')
-            # maybe add 'PREP' later
+        elif tok.pos_ == 'ADJ':
+            lemmas.append(tok.orth_.lower()+'ADJ')
+        elif tok.pos_ in useless_pos:
+            lemmas.append(tok.pos_)
+        #     # maybe add 'PREP' later
         else:
             lemmas.append(tok.lemma_.lower().strip())
     tokens = lemmas
 
     # punctuation symbols, and pick out only words
-    tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS and re.match('^[a-zA-Z]+$', tok) != None]
+    # and re.match('^[a-zA-Z]+$', tok) != None
+    tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS ]
 
     print(tokens[:100])
     return tokens
@@ -87,7 +88,8 @@ def build_dataset(words, n_words):
 
     counter = [['UNK', -1]]
     counter.extend(collections.Counter(words).most_common(n_words - 1))
-    print(len(counter))
+    # print(len(counter))
+    assert len(counter) == n_words
 
     dictionary = dict()
     for word, _ in counter:
@@ -106,10 +108,6 @@ def build_dataset(words, n_words):
 
 def is_keep_as_context(word):
     global total_word_count, counter
-    # index = dictionary.get(word, 0)
-    # print(word)
-    # print(counter)
-    # print(counter[dictionary[word]][1])
     frequency = float(counter[dictionary[word]][1])/float(total_word_count)
     prob = (math.sqrt(frequency/0.001) + 1) * (0.001/frequency)
     if random.uniform(0,1) < prob:
@@ -148,7 +146,7 @@ def generate_batch(batch_size, num_samples, skip_window):
         # while (reverse_dictionary[buffer[skip_window]] in sensitive_replace_word or parser(reverse_dictionary[buffer[skip_window]])[0].is_stop) and random.uniform(0, 1) < 0.85:
         
         ## pick a proper center word
-        while is_keep_as_context(reverse_dictionary[buffer[skip_window]]) == False
+        while is_keep_as_context(reverse_dictionary[buffer[skip_window]]) == False:
             if data_index >= RIGHT_BOUND:
                 data_index = span
                 buffer.extend(data_filled_with_num[:span])
@@ -194,11 +192,11 @@ def write_embedding_to_file(final_embeddings, embeddings_file_name):
 
 
 def process_data(input_data_dir):
-    if os.path.exists('processed_data.pkl'):
-        with open("processed_data.pkl", "rb") as fp:   # Unpickling
-            global parser
-            parser = English()
-            return pickle.load(fp)
+    # if os.path.exists('processed_data.pkl'):
+    #     with open("processed_data.pkl", "rb") as fp:   # Unpickling
+    #         global parser
+    #         parser = English()
+    #         return pickle.load(fp)
 
     data = ''
     with zipfile.ZipFile(input_data_dir) as zipf:
@@ -210,10 +208,10 @@ def process_data(input_data_dir):
 
     data = tokenizeText(data)
 
-    with open("processed_data.pkl", "wb") as fp:   #Pickling
-        pickle.dump(data, fp)
+    # with open("processed_data.pkl", "wb") as fp:   #Pickling
+    #     pickle.dump(data, fp)
 
-    print(len(data))
+    print('len(data): ',len(data))
 
     return data
 
@@ -257,6 +255,7 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
         # Compute the average NCE loss for the batch.
         # tf.nce_loss automatically draws a new sample of the negative labels each
         # time we evaluate the loss.
+        print('in usage, learning_rate: {}, nsampled: {}, vocabulary_size: {}'.format(learning_rate, num_sampled_ns, vocabulary_size))
         with tf.name_scope('Loss'):
             loss = tf.reduce_mean(tf.nn.sampled_softmax_loss(weights=nce_weights, biases=nce_biases,
                                              labels=train_labels, inputs=embed,
@@ -334,7 +333,7 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
 def Compute_topk(model_file, input_adjective, top_k):
     global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
-    sensitive_replace_word = ['UNK', 'PRON', 'CONJ']
+    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP']
 
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
@@ -349,7 +348,8 @@ def Compute_topk(model_file, input_adjective, top_k):
         for word in words:
             if word in sensitive_replace_word:
                 continue
-            if parser(word)[0].pos_ == tword_token.pos_:
+            # if parser(word)[0].pos_ == tword_token.pos_:
+            if re.match('ADJ$', word) != None:
                 output.append(word)
         if len(output) < top_k:
             temp_topk_multiplier += 1
@@ -365,7 +365,7 @@ if __name__ == "__main__":
     model_file = 'adjective_embeddings.txt'
     adjective_embeddings(data, model_file, number_of_iterations, embedding_dim)
     # input_adjective = 'bad'
-    top_k = 10
+    top_k = 50
     test_words = ['able', 'average', 'bad', 'best', 'big', 'certain', 'common', 'current', 'different', 'difficult', 'early', 'extra', 'fair', 'few', 'final', 'former', 'great', 'hard', 'high', 'huge', 'important', 'key', 'large', 'last', 'less', 'likely', 'little', 'major', 'more', 'most', 'much', 'new', 'next', 'old', 'prime', 'real', 'recent', 'same', 'serious', 'short', 'small', 'top', 'tough', 'wide']
     for tword in test_words:
         print(tword, ': ',Compute_topk(model_file, tword, top_k))
