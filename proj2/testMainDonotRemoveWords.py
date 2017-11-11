@@ -21,7 +21,7 @@ import math
 from scipy.spatial import KDTree
 
 import time
-
+from sklearn.feature_extraction.stop_words import ENGLISH_STOP_WORDS
 
 
 ### fixed parameters
@@ -32,10 +32,10 @@ number_of_iterations = 100001
 # record 7000 128 8 8 512 0.003, result 2.715
 
 ### Tunable parameter
-vocabulary_size = 6000
+vocabulary_size = 7000
 batch_size = 128      # Size of mini-batch for skip-gram model..
 # 1
-skip_window = 4       # How many words to consider left and right of the target word.
+skip_window = 3       # How many words to consider left and right of the target word.
 # 2
 num_samples = 4         # How many times to reuse an input to generate a label.
 num_sampled_ns = 32        # How many negative samples going to be chose, as suggested 10~30 for small dataset
@@ -57,30 +57,44 @@ def tokenizeText(corpus):
 
     # lemmatize
     # 'VERB', 'NOUN', 'ADV', consider only use ADJ
-    important_pos = ['ADJ', 'NOUN']
-    useless_pos = ['PRON', 'CONJ', 'PREP']
+    # important_pos = ['ADJ', 'NOUN']
+    useless_pos = ['PRON', 'CONJ', 'PREP', 'DET', 'NUM'] # 'ADP'
+    skip_pos = ['PUNCT', 'SPACE', 'SYM']
     lemmas = []
+    previous_word = ''
+
+    # use eof instead of eos, since there may be situation where one sentence is too short
+
+    # for sentence in tokens.sents:
     for tok in tokens:
-        if tok.ent_type_ != "":
+        if tok.orth_ == 'EOF':
+            lemmas.append('-EOF-')
+        elif tok.ent_type_ != "" and "-"+tok.ent_type_+"-" != previous_word:
             # may consider do lemmas.append("-"+tok.ent_type_+"-")
             # print('tok.ent_type_: ', tok.ent_type_)
             lemmas.append("-"+tok.ent_type_+"-")
             # continue
+        elif tok.pos_ in skip_pos:
+            continue
         elif tok.pos_ == 'ADJ':
-            lemmas.append(tok.orth_.lower()+'ADJ')
-        elif tok.pos_ in useless_pos:
+            lemmas.append(tok.orth_.lower().strip()+'ADJ')
+        elif tok.pos_ in useless_pos and tok.pos_ != previous_word:
             lemmas.append(tok.pos_)
         #     # maybe add 'PREP' later
         else:
             lemmas.append(tok.lemma_.lower().strip())
-    tokens = lemmas
+        previous_word = lemmas[-1]
 
+        # lemmas.append('-EOS-')
+        # previous_word = ''
+
+    tokens = lemmas
     # punctuation symbols, and pick out only words
     # and re.match('^[a-zA-Z]+$', tok) != None
     tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS and re.match('^[a-zA-Z\-]+$', tok) != None]
     
     # print(tokens[:100])
-    for tok in tokens[:100]:
+    for tok in tokens[:500]:
         try:
             print(tok)
         except UnicodeEncodeError:
@@ -152,12 +166,8 @@ def generate_batch(batch_size, num_samples, skip_window):
     RIGHT_BOUND = len(data_filled_with_num) - span - 1
     data_index += span
     for i in range(batch_size // num_samples):
-        # 15% to be center word
-        # sensitive_replace_word = ['UNK', 'PRON', 'CONJ']
-        # while (reverse_dictionary[buffer[skip_window]] in sensitive_replace_word or parser(reverse_dictionary[buffer[skip_window]])[0].is_stop) and random.uniform(0, 1) < 0.85:
-        
         ## pick a proper center word
-        while is_keep_as_context(reverse_dictionary[buffer[skip_window]]) == False:
+        while reverse_dictionary[buffer[skip_window]] == '-EOF-' or is_keep_as_context(reverse_dictionary[buffer[skip_window]]) == False:
             if data_index >= RIGHT_BOUND:
                 data_index = span
                 buffer.extend(data_filled_with_num[:span])
@@ -169,23 +179,40 @@ def generate_batch(batch_size, num_samples, skip_window):
         random.shuffle(context_words)
         words_to_use = collections.deque(context_words) # now we obtain a random list of context words
 
+        ## pick context word
         j = 0
         while j < num_samples:
             context_word = words_to_use.pop()
-            if len(words_to_use) == 1 and j < num_samples:
+            if len(words_to_use) == 0 and j < num_samples:
                 words_to_use.extend([w for w in range(span) if w != skip_window])
-            if is_keep_as_context(reverse_dictionary[buffer[context_word]]):
+            if reverse_dictionary[buffer[skip_window]] != '-EOF-' and is_keep_as_context(reverse_dictionary[buffer[context_word]]):
                 batch[i * num_samples + j] = buffer[skip_window]
                 labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
                 j += 1
 
+        while dictionary['-EOF-'] in buffer:
+            if buffer.popleft() == dictionary['-EOF-']:
+                break
+            # print('try to pop the EOF out')
+            buffer.append(data_filled_with_num[data_index])
+            data_index += 1
+            if data_index >= RIGHT_BOUND:
+                buffer.extend(data_filled_with_num[:span])
+                data_index = span
+            # print('after clean the buffer: ', end = " ")
+            # for b in buffer:
+            #     print(reverse_dictionary[b], end = " ")
+            # print()
+
         # slide the window to the next position
-        if data_index == len(data_filled_with_num):
+        if data_index >= RIGHT_BOUND:
             buffer.extend(data_filled_with_num[:span])
             data_index = span
         else:
             buffer.append(data_filled_with_num[data_index]) # note that due to the size limit, the left most word is automatically removed from the buffer.
             data_index += 1
+
+        # print('here')
 
     # end-of-for
     data_index = (data_index + len(data_filled_with_num) - span) % len(data_filled_with_num) # move data_index back by `span`
@@ -213,7 +240,7 @@ def process_data(input_data_dir):
     with zipfile.ZipFile(input_data_dir) as zipf:
         # data = tf.compat.as_str(f.read(f.namelist()[0])).split()
         for f in zipf.namelist():
-            data += tf.compat.as_str(zipf.read(f)) + ' '
+            data += tf.compat.as_str(zipf.read(f)) + ' [EOF] '
 
     # print(data[:10], len(data))
 
@@ -345,7 +372,8 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
 def Compute_topk(model_file, input_adjective, top_k):
     global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
-    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP']
+    # 'ADP'
+    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP', 'DET', 'NUM']
 
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
@@ -361,12 +389,14 @@ def Compute_topk(model_file, input_adjective, top_k):
             if word in sensitive_replace_word:
                 continue
             # if parser(word)[0].pos_ == tword_token.pos_:
-            # if re.match('ADJ', word) != None:
+            # and word[:-3] not in list(ENGLISH_STOP_WORDS)
             if word[-3:] == 'ADJ':
                 # print(word)
                 output.append(word[:-3])
+            elif parser(word)[0].pos_ == 'ADJ':
+                output.append(word)
 
-        if temp_topk_multiplier > 30:
+        if temp_topk_multiplier > 10:
             break
 
         if len(output) < top_k:
