@@ -29,21 +29,19 @@ embedding_dim = 200
 number_of_iterations = 100001
 # Loss function, optimizer
 
-# record 5000, 128, 3, 4, 32, 0.002 without ADP performance 5.3
-
 ### Tunable parameter
-vocabulary_size = 5000
+vocabulary_size = 10000
 batch_size = 128      # Size of mini-batch for skip-gram model..
 # 1
-skip_window = 3       # How many words to consider left and right of the target word.
+skip_window = 2       # How many words to consider left and right of the target word.
 # 2
-num_samples = 4         # How many times to reuse an input to generate a label.
+num_samples = 3         # How many times to reuse an input to generate a label.
 num_sampled_ns = 32        # How many negative samples going to be chose, as suggested 10~30 for small dataset
 learning_rate = 0.002
 
 logs_path = './log/'
 
-SELF_DEFINED_STOP_WORD = ['which','its','that','this','what','how', 'their', 'his', 'her']
+SELF_DEFINED_STOP_WORD = ['which','its','that','this','what','how', 'their', 'his', 'her', 'our']
 
 global data_filled_with_num, counter, dictionary, reverse_dictionary
 global parser
@@ -65,43 +63,33 @@ def tokenizeText(corpus):
     lemmas = []
     previous_word = ''
 
-    # use eof instead of eos, since there may be situation where one sentence is too short
+    for sentence in tokens.sents:
+        sentence_list = []
+        previous_word = ''
+        for tok in sentence:
+            if tok.ent_type_ != "" and "-"+tok.ent_type_+"-" != previous_word:
+                sentence_list.append("-"+tok.ent_type_+"-")
+            elif tok.pos_ in skip_pos:
+                continue
+            elif tok.pos_ == 'ADJ':
+                sentence_list.append(tok.orth_.lower().strip()+'ADJ')
+            elif tok.pos_ in useless_pos and tok.pos_ != previous_word:
+                sentence_list.append(tok.pos_)
+            #     # maybe add 'PREP' later
+            else:
+                sentence_list.append(tok.lemma_.lower().strip())
 
-    # for sentence in tokens.sents:
-    for tok in tokens:
-        if tok.orth_ == 'EOF':
-            lemmas.append('-EOF-')
-        elif tok.ent_type_ != "" and "-"+tok.ent_type_+"-" != previous_word:
-            # may consider do lemmas.append("-"+tok.ent_type_+"-")
-            # print('tok.ent_type_: ', tok.ent_type_)
-            lemmas.append("-"+tok.ent_type_+"-")
-            # continue
-        elif tok.pos_ in skip_pos:
-            continue
-        elif tok.pos_ == 'ADJ':
-            lemmas.append(tok.orth_.lower().strip()+'ADJ')
-        elif tok.pos_ in useless_pos and tok.pos_ != previous_word:
-            lemmas.append(tok.pos_)
-        #     # maybe add 'PREP' later
-        else:
-            lemmas.append(tok.lemma_.lower().strip())
+            # clean up
+            if re.match('^[a-zA-Z\-]+$', sentence_list[-1]) != None:
+                previous_word = sentence_list[-1]
+            else:
+                sentence_list.pop()
 
-        # clean up
-        if re.match('^[a-zA-Z\-]+$', lemmas[-1]) != None:
-            previous_word = lemmas[-1]
-        else:
-            lemmas.pop()
+        lemmas.append(sentence_list)
 
-        # lemmas.append('-EOS-')
-        # previous_word = ''
+    tokens = lemmas
 
-    tokens = lemmas[1:] # remove the very first -EOF-
-    # punctuation symbols, and pick out only words
-    # and re.match('^[a-zA-Z]+$', tok) != None
-    # tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS and re.match('^[a-zA-Z\-]+$', tok) != None]
-    
-    # print(tokens[:100])
-    for tok in tokens[:500]:
+    for tok in tokens[:100]:
         try:
             print(tok)
         except UnicodeEncodeError:
@@ -109,18 +97,18 @@ def tokenizeText(corpus):
 
     return tokens
 
-def build_dataset(words, n_words):
+def build_dataset(sentences, n_words):
     """Process raw inputs into a dataset.
-       words: a list of words, i.e., the input data
+       sentences: a list of sentences, i.e., the input data
        n_words: Vocab_size to limit the size of the vocabulary. Other words will be mapped to 'UNK'
     """
+    words_flatten = [item for sublist in sentences for item in sublist]
+
     global total_word_count
-    total_word_count = len(words)
+    total_word_count = len(words_flatten)
 
     counter = [['UNK', -1]]
-    counter.extend(collections.Counter(words).most_common(n_words - 1))
-    # print(len(counter))
-    
+    counter.extend(collections.Counter(words_flatten).most_common(n_words - 1))
     assert len(counter) == n_words
 
     dictionary = dict()
@@ -128,16 +116,26 @@ def build_dataset(words, n_words):
         dictionary[word] = len(dictionary)
     data = list()
     unk_count = 0
-    for word in words:
-        index = dictionary.get(word, 0)
-        if index == 0:  # i.e., one of the 'UNK' words
-            unk_count += 1
-        data.append(index)
+
+    for sentence in sentences:
+        st_of_numbers = []
+        for word in sentence:
+            index = dictionary.get(word, 0)
+            if index == 0:  # i.e., one of the 'UNK' words
+                unk_count += 1
+            st_of_numbers.append(index)
+        data.append(st_of_numbers)
+
     counter[0][1] = unk_count
 
     print(counter[:n_words])
 
     reversed_dictionary = dict(zip(dictionary.values(), dictionary.keys()))
+
+    print('data of sentences filled with numbers: ')
+    for i in range(10):
+        print(data[i])
+
     return data, counter, dictionary, reversed_dictionary
 
 
@@ -152,81 +150,78 @@ def is_keep_as_context(word):
 
 
 # used in generate_batch
-data_index = 0
+sentence_index = 0
 def generate_batch(batch_size, num_samples, skip_window):
-    global data_index
+    global sentence_index
     global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
-    assert batch_size % num_samples == 0
+    # assert batch_size % num_samples == 0
     assert num_samples <= 2 * skip_window
 
     batch = np.ndarray(shape=(batch_size), dtype=np.int32)
     labels = np.ndarray(shape=(batch_size, 1), dtype=np.int32)
     span = 2 * skip_window + 1  # span is the width of the sliding window
-    buffer = collections.deque(maxlen=span)
-    if data_index + span > len(data_filled_with_num):
-        data_index = 0
-    buffer.extend(data_filled_with_num[data_index:data_index + span]) # initial buffer content = first sliding window
 
-    # try:
-    #     print('generate batch data_index = {}, buffer = {}'.format(data_index, [reverse_dictionary[w] for w in buffer]))
-    # except UnicodeEncodeError:
-    #     print('UnicodeEncodeError')
+    ##### loop through data_filled_with_num get sentences, loop through sentences get span windows, and for each
+    ##### span window, pick num_samples out of with consideration of subsampling
+    entries_in_batch = 0
+    length_of_data_filled_with_num = len(data_filled_with_num)
+    while entries_in_batch < batch_size:
+        if sentence_index == length_of_data_filled_with_num:
+            sentence_index = 0
 
-    RIGHT_BOUND = len(data_filled_with_num) - span - 1
-    data_index += span
-    for i in range(batch_size // num_samples):
-        ## pick a proper center word
-        while reverse_dictionary[buffer[skip_window]] == '-EOF-' or is_keep_as_context(reverse_dictionary[buffer[skip_window]]) == False:
-            if data_index >= RIGHT_BOUND:
-                data_index = span
-                buffer.extend(data_filled_with_num[:span])
-
-            data_index += 1
-            buffer.append(data_filled_with_num[data_index + span])
-
-        context_words = [w for w in range(span) if w != skip_window]
-        random.shuffle(context_words)
-        words_to_use = collections.deque(context_words) # now we obtain a random list of context words
-
-        ## pick context word
-        j = 0
-        while j < num_samples:
-            context_word = words_to_use.pop()
-            if len(words_to_use) == 0 and j < num_samples:
-                words_to_use.extend([w for w in range(span) if w != skip_window])
-            if reverse_dictionary[buffer[skip_window]] != '-EOF-' and is_keep_as_context(reverse_dictionary[buffer[context_word]]):
-                batch[i * num_samples + j] = buffer[skip_window]
-                labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
-                j += 1
-
-        while dictionary['-EOF-'] in buffer:
-            if buffer.popleft() == dictionary['-EOF-']:
-                break
-            # print('try to pop the EOF out')
-            buffer.append(data_filled_with_num[data_index])
-            data_index += 1
-            if data_index >= RIGHT_BOUND:
-                buffer.extend(data_filled_with_num[:span])
-                data_index = span
-            # print('after clean the buffer: ', end = " ")
-            # for b in buffer:
-            #     print(reverse_dictionary[b], end = " ")
-            # print()
-
-        # slide the window to the next position
-        if data_index >= RIGHT_BOUND:
-            buffer.extend(data_filled_with_num[:span])
-            data_index = span
+        st_of_numbers = data_filled_with_num[sentence_index]
+        # print('st_of_numbers: ', st_of_numbers)
+        if len(st_of_numbers) < span:
+            middle_index = len(st_of_numbers) // 2
+            for i in range(len(st_of_numbers)):
+                if i == middle_index:
+                    continue
+                if is_keep_as_context(reverse_dictionary[st_of_numbers[i]]):
+                    batch[entries_in_batch] = st_of_numbers[middle_index]
+                    labels[entries_in_batch, 0] = st_of_numbers[i] 
+                    entries_in_batch += 1
+                    # only need check it when entries_in_batch get checked
+                    if entries_in_batch == batch_size:
+                        sentence_index += 1
+                        # print('Upon return 1, entries in batch: ', entries_in_batch)
+                        return batch, labels
         else:
-            buffer.append(data_filled_with_num[data_index]) # note that due to the size limit, the left most word is automatically removed from the buffer.
-            data_index += 1
+            # the context_word_index and center_word_index are the index in st_of_numbers
+            center_word_index = skip_window
+            while center_word_index < len(st_of_numbers) - skip_window:
+                ## pick center word
+                if is_keep_as_context(reverse_dictionary[st_of_numbers[center_word_index]]) == False:
+                    center_word_index += 1
+                    continue
+                ## pick context word
+                context_words_indexes = [w for w in range(center_word_index - skip_window, center_word_index + skip_window + 1) if w != center_word_index]
+                random.shuffle(context_words_indexes)
+                words_to_use = collections.deque(context_words_indexes)
+                context_word_count = 0
+                while context_word_count < num_samples:
+                    context_word_index = words_to_use.pop()
+                    if len(words_to_use) == 0:
+                        words_to_use.extend(context_words_indexes)
 
-        # print('here')
+                    if is_keep_as_context(reverse_dictionary[st_of_numbers[context_word_index]]):
+                        batch[entries_in_batch] = st_of_numbers[center_word_index]
+                        labels[entries_in_batch, 0] = st_of_numbers[context_word_index] 
+                        entries_in_batch += 1
+                        context_word_count += 1
+                        # if this sentence only get used less half of its length, then do not increase sentence_index
+                        if entries_in_batch == batch_size and center_word_index < len(st_of_numbers) // 2:
+                            # print('Upon return 2, entries in batch: ', entries_in_batch)
+                            return batch, labels
+                        elif entries_in_batch == batch_size:
+                            # print('Upon return 3, entries in batch: ', entries_in_batch)
+                            sentence_index += 1
+                            return batch, labels    
+                ## move the extraction window by 1 after every extraction
+                center_word_index += 1
 
-    # end-of-for
-    data_index = (data_index + len(data_filled_with_num) - span) % len(data_filled_with_num) # move data_index back by `span`
-    return batch, labels
+        # After checking every sentence, increase the sentence_index by 1
+        sentence_index += 1
 
 
 def write_embedding_to_file(final_embeddings, embeddings_file_name):
@@ -240,24 +235,24 @@ def write_embedding_to_file(final_embeddings, embeddings_file_name):
 
 
 def process_data(input_data_dir):
-    if os.path.exists('processed_data.pkl'):
-        with open("processed_data.pkl", "rb") as fp:   # Unpickling
-            global parser
-            parser = English()
-            return pickle.load(fp)
+    # if os.path.exists('processed_data.pkl'):
+    #     with open("processed_data.pkl", "rb") as fp:   # Unpickling
+    #         global parser
+    #         parser = English()
+    #         return pickle.load(fp)
 
     data = ''
     with zipfile.ZipFile(input_data_dir) as zipf:
         # data = tf.compat.as_str(f.read(f.namelist()[0])).split()
         for f in zipf.namelist():
-            data += tf.compat.as_str(zipf.read(f)) + ' [EOF] '
+            data += tf.compat.as_str(zipf.read(f)) + "\n"
 
     # print(data[:10], len(data))
 
     data = tokenizeText(data)
 
-    with open("processed_data.pkl", "wb") as fp:   #Pickling
-        pickle.dump(data, fp)
+    # with open("processed_data.pkl", "wb") as fp:   #Pickling
+    #     pickle.dump(data, fp)
 
     print('len(data): ',len(data))
 
@@ -340,12 +335,11 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
 
         average_loss = 0
         for step in range(num_steps):
-            # print('step: ', step)
             batch_inputs, batch_labels = generate_batch(batch_size, num_samples, skip_window)
-            print('print batch_inputs and batch_labels, len(batch_inputs): ', len(batch_inputs))
-            for i in range(len(batch_inputs) - 10, len(batch_inputs)):
-                print('batch_inputs: ', batch_inputs[i])
-                print('batch_labels: ', batch_labels[i][0])
+            # print('print batch_inputs and batch_labels, len(batch_inputs): ', len(batch_inputs))
+            # for i in range(len(batch_inputs) - 10, len(batch_inputs)):
+            #     print('batch_inputs: ', batch_inputs[i])
+            #     print('batch_labels: ', batch_labels[i][0])
             feed_dict = {train_inputs: batch_inputs, train_labels: batch_labels}
 
             # We perform one update step by evaluating the optimizer op using session.run()
@@ -422,9 +416,9 @@ def Compute_topk(model_file, input_adjective, top_k):
 
 
 if __name__ == "__main__":
-    data = process_data('./BBC_Data.zip')
+    data_of_sentences = process_data('./BBC_Data.zip')
     model_file = 'adjective_embeddings.txt'
-    adjective_embeddings(data, model_file, number_of_iterations, embedding_dim)
+    adjective_embeddings(data_of_sentences, model_file, number_of_iterations, embedding_dim)
     top_k = 100
 
     from os import listdir
