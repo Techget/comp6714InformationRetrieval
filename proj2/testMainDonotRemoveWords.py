@@ -32,18 +32,16 @@ number_of_iterations = 100001
 # record 5000, 128, 3, 4, 32, 0.002 without ADP performance 5.3
 
 ### Tunable parameter
-vocabulary_size = 5000
+vocabulary_size = 11000
 batch_size = 128      # Size of mini-batch for skip-gram model..
-# 1
-skip_window = 3       # How many words to consider left and right of the target word.
-# 2
-num_samples = 4         # How many times to reuse an input to generate a label.
-num_sampled_ns = 32        # How many negative samples going to be chose, as suggested 10~30 for small dataset
+skip_window = 2       # How many words to consider left and right of the target word.
+num_samples = 2         # How many times to reuse an input to generate a label.
+num_sampled_ns = 64        # How many negative samples going to be chose, as suggested 10~30 for small dataset
 learning_rate = 0.002
 
 logs_path = './log/'
 
-SELF_DEFINED_STOP_WORD = ['which','its','that','this','what','how', 'their', 'his', 'her']
+SELF_DEFINED_STOP_WORD = ['which','its','that','this','what','how', 'their', 'his', 'her', 'our', 'it']
 
 global data_filled_with_num, counter, dictionary, reverse_dictionary
 global parser
@@ -60,8 +58,8 @@ def tokenizeText(corpus):
     # lemmatize
     # 'VERB', 'NOUN', 'ADV', consider only use ADJ
     # important_pos = ['ADJ', 'NOUN']
-    useless_pos = ['PRON', 'CONJ', 'PREP', 'DET', 'NUM'] # 'ADP'
-    skip_pos = ['PUNCT', 'SPACE', 'SYM']
+    useless_pos = ['PRON', 'CONJ', 'PREP', 'NUM', 'SYM'] # 'ADP', 'DET'
+    skip_pos = ['PUNCT', 'SPACE', 'PART']
     lemmas = []
     previous_word = ''
 
@@ -143,6 +141,7 @@ def build_dataset(words, n_words):
 
 def is_keep_as_context(word):
     global total_word_count, counter
+    # the word is retrieved from reverse_dictionary, so it definitely exist in dictionary
     frequency = float(counter[dictionary[word]][1])/float(total_word_count)
     prob = (math.sqrt(frequency/0.001) + 1) * (0.001/frequency)
     if random.uniform(0,1) < prob:
@@ -185,16 +184,25 @@ def generate_batch(batch_size, num_samples, skip_window):
             data_index += 1
             buffer.append(data_filled_with_num[data_index + span])
 
-        context_words = [w for w in range(span) if w != skip_window]
-        random.shuffle(context_words)
+        # context_words = [w for w in range(span) if w != skip_window]
+        # random.shuffle(context_words)
+        context_words = []
+        for i in range(1, skip_window+1):
+            context_words.append(skip_window + i)
+            context_words.append(skip_window - i)
         words_to_use = collections.deque(context_words) # now we obtain a random list of context words
+
+        try:
+            print('generate batch data_index = {}, buffer = {}'.format(data_index, [reverse_dictionary[w] for w in buffer]))
+        except UnicodeEncodeError:
+            print('UnicodeEncodeError')
 
         ## pick context word
         j = 0
         while j < num_samples:
             context_word = words_to_use.pop()
             if len(words_to_use) == 0 and j < num_samples:
-                words_to_use.extend([w for w in range(span) if w != skip_window])
+                words_to_use.extend(context_words)
             if reverse_dictionary[buffer[skip_window]] != '-EOF-' and is_keep_as_context(reverse_dictionary[buffer[context_word]]):
                 batch[i * num_samples + j] = buffer[skip_window]
                 labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
@@ -342,10 +350,10 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
         for step in range(num_steps):
             # print('step: ', step)
             batch_inputs, batch_labels = generate_batch(batch_size, num_samples, skip_window)
-            print('print batch_inputs and batch_labels, len(batch_inputs): ', len(batch_inputs))
-            for i in range(len(batch_inputs) - 10, len(batch_inputs)):
-                print('batch_inputs: ', batch_inputs[i])
-                print('batch_labels: ', batch_labels[i][0])
+            # print('print batch_inputs and batch_labels, len(batch_inputs): ', len(batch_inputs))
+            # for i in range(len(batch_inputs) - 10, len(batch_inputs)):
+            #     print('batch_inputs: ', batch_inputs[i])
+            #     print('batch_labels: ', batch_labels[i][0])
             feed_dict = {train_inputs: batch_inputs, train_labels: batch_labels}
 
             # We perform one update step by evaluating the optimizer op using session.run()
@@ -386,8 +394,8 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
 def Compute_topk(model_file, input_adjective, top_k):
     global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
-    # 'ADP'
-    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP', 'DET', 'NUM'] 
+    # 'ADP', 'DET'
+    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP' , 'NUM', 'SYM'] 
 
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
