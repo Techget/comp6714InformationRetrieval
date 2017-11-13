@@ -29,14 +29,13 @@ embedding_dim = 200
 number_of_iterations = 100001
 # Loss function, optimizer
 
+# v 10000 is not good
 ### Tunable parameter
 vocabulary_size = 10000
 batch_size = 128      # Size of mini-batch for skip-gram model..
-# 1
-skip_window = 2       # How many words to consider left and right of the target word.
-# 2
-num_samples = 3         # How many times to reuse an input to generate a label.
-num_sampled_ns = 32        # How many negative samples going to be chose, as suggested 10~30 for small dataset
+skip_window = 3       # How many words to consider left and right of the target word.
+num_samples = 4         # How many times to reuse an input to generate a label.
+num_sampled_ns = 64        # How many negative samples going to be chose, as suggested 10~30 for small dataset
 learning_rate = 0.002
 
 logs_path = './log/'
@@ -53,13 +52,13 @@ def tokenizeText(corpus):
     # get the tokens using spaCy
     tokens = parser(corpus)
 
-    PUNC_SYMBOLS = " ".join(string.punctuation).split(" ") + ["-----", "---", "...", "“", "”", "'ve", " "]
+    # PUNC_SYMBOLS = " ".join(string.punctuation).split(" ") + ["-----", "---", "...", "“", "”", "'ve", " "]
 
     # lemmatize
     # 'VERB', 'NOUN', 'ADV', consider only use ADJ
     # important_pos = ['ADJ', 'NOUN']
-    useless_pos = ['PRON', 'CONJ', 'PREP', 'DET', 'NUM'] # 'ADP'
-    skip_pos = ['PUNCT', 'SPACE', 'SYM']
+    useless_pos = ['PRON', 'CONJ', 'PREP', 'DET', 'NUM', 'SYM'] # 'ADP'
+    skip_pos = ['PUNCT', 'SPACE', 'PART']
     lemmas = []
     previous_word = ''
 
@@ -75,10 +74,8 @@ def tokenizeText(corpus):
                 sentence_list.append(tok.orth_.lower().strip()+'ADJ')
             elif tok.pos_ in useless_pos and tok.pos_ != previous_word:
                 sentence_list.append(tok.pos_)
-            #     # maybe add 'PREP' later
             else:
                 sentence_list.append(tok.lemma_.lower().strip())
-
             # clean up
             if re.match('^[a-zA-Z\-]+$', sentence_list[-1]) != None:
                 previous_word = sentence_list[-1]
@@ -151,8 +148,9 @@ def is_keep_as_context(word):
 
 # used in generate_batch
 sentence_index = 0
+previous_sentence_index = 0
 def generate_batch(batch_size, num_samples, skip_window):
-    global sentence_index
+    global sentence_index, previous_sentence_index
     global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
     # assert batch_size % num_samples == 0
@@ -168,10 +166,11 @@ def generate_batch(batch_size, num_samples, skip_window):
     length_of_data_filled_with_num = len(data_filled_with_num)
     while entries_in_batch < batch_size:
         if sentence_index == length_of_data_filled_with_num:
+            # print('reset sentence index to zero')
             sentence_index = 0
 
         st_of_numbers = data_filled_with_num[sentence_index]
-        # print('st_of_numbers: ', st_of_numbers)
+        # print('sentence_index: ', sentence_index, 'st_of_numbers: ', st_of_numbers)
         if len(st_of_numbers) < span:
             middle_index = len(st_of_numbers) // 2
             for i in range(len(st_of_numbers)):
@@ -183,12 +182,16 @@ def generate_batch(batch_size, num_samples, skip_window):
                     entries_in_batch += 1
                     # only need check it when entries_in_batch get checked
                     if entries_in_batch == batch_size:
+                        previous_sentence_index = 0 # for safety, add it
                         sentence_index += 1
                         # print('Upon return 1, entries in batch: ', entries_in_batch)
                         return batch, labels
         else:
             # the context_word_index and center_word_index are the index in st_of_numbers
-            center_word_index = skip_window
+            if previous_sentence_index > 0:
+                center_word_index = previous_sentence_index
+            else:
+                center_word_index = skip_window
             while center_word_index < len(st_of_numbers) - skip_window:
                 ## pick center word
                 if is_keep_as_context(reverse_dictionary[st_of_numbers[center_word_index]]) == False:
@@ -210,11 +213,13 @@ def generate_batch(batch_size, num_samples, skip_window):
                         entries_in_batch += 1
                         context_word_count += 1
                         # if this sentence only get used less half of its length, then do not increase sentence_index
-                        if entries_in_batch == batch_size and center_word_index < len(st_of_numbers) // 2:
+                        if entries_in_batch == batch_size and center_word_index < len(st_of_numbers) - skip_window:
                             # print('Upon return 2, entries in batch: ', entries_in_batch)
+                            previous_sentence_index = center_word_index
                             return batch, labels
                         elif entries_in_batch == batch_size:
                             # print('Upon return 3, entries in batch: ', entries_in_batch)
+                            previous_sentence_index = 0
                             sentence_index += 1
                             return batch, labels    
                 ## move the extraction window by 1 after every extraction
@@ -337,7 +342,7 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
         for step in range(num_steps):
             batch_inputs, batch_labels = generate_batch(batch_size, num_samples, skip_window)
             # print('print batch_inputs and batch_labels, len(batch_inputs): ', len(batch_inputs))
-            # for i in range(len(batch_inputs) - 10, len(batch_inputs)):
+            # for i in range(len(batch_inputs)):
             #     print('batch_inputs: ', batch_inputs[i])
             #     print('batch_labels: ', batch_labels[i][0])
             feed_dict = {train_inputs: batch_inputs, train_labels: batch_labels}
@@ -381,7 +386,7 @@ def Compute_topk(model_file, input_adjective, top_k):
     global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
     # 'ADP'
-    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP', 'DET', 'NUM'] 
+    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP', 'DET', 'NUM', 'SYM'] 
 
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
@@ -448,6 +453,3 @@ if __name__ == "__main__":
         print("\n")
 
     print('average hits: ', match_counter / len(word_files))
-
-    # for tword in test_words:
-    #     print(tword, ': ',Compute_topk(model_file, tword, top_k))
