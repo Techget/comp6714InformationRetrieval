@@ -32,10 +32,10 @@ number_of_iterations = 100001
 # record 5000, 128, 3, 4, 32, 0.002 without ADP performance 5.3
 
 ### Tunable parameter
-vocabulary_size = 11000
+vocabulary_size = 10000
 batch_size = 128      # Size of mini-batch for skip-gram model..
-skip_window = 2       # How many words to consider left and right of the target word.
-num_samples = 2         # How many times to reuse an input to generate a label.
+skip_window = 3       # How many words to consider left and right of the target word.
+num_samples = 4         # How many times to reuse an input to generate a label.
 num_sampled_ns = 64        # How many negative samples going to be chose, as suggested 10~30 for small dataset
 learning_rate = 0.002
 
@@ -53,13 +53,13 @@ def tokenizeText(corpus):
     # get the tokens using spaCy
     tokens = parser(corpus)
 
-    PUNC_SYMBOLS = " ".join(string.punctuation).split(" ") + ["-----", "---", "...", "“", "”", "'ve", " "]
+    # PUNC_SYMBOLS = " ".join(string.punctuation).split(" ") + ["-----", "---", "...", "“", "”", "'ve", " "]
 
     # lemmatize
     # 'VERB', 'NOUN', 'ADV', consider only use ADJ
-    # important_pos = ['ADJ', 'NOUN']
-    useless_pos = ['PRON', 'CONJ', 'PREP', 'NUM', 'SYM'] # 'ADP', 'DET'
-    skip_pos = ['PUNCT', 'SPACE', 'PART']
+    # important_pos = ['VERB', 'NOUN']
+    useless_pos = ['NUM', 'SYM', 'CONJ'] # 'PROPN', 'CCONJ', 'ADP', 'DET', 'PRON', 'CONJ', 'PREP'
+    skip_pos = ['PUNCT', 'SPACE'] # , 'PART'
     lemmas = []
     previous_word = ''
 
@@ -78,6 +78,10 @@ def tokenizeText(corpus):
             continue
         elif tok.pos_ == 'ADJ':
             lemmas.append(tok.orth_.lower().strip()+'ADJ')
+        elif tok.pos_ == 'NOUN':
+            lemmas.append(tok.orth_.lower().strip()+'NOUN')
+        elif tok.pos_ == 'VERB':
+            lemmas.append(tok.lemma_.lower().strip()+'VERB')
         elif tok.pos_ in useless_pos and tok.pos_ != previous_word:
             lemmas.append(tok.pos_)
         #     # maybe add 'PREP' later
@@ -94,11 +98,7 @@ def tokenizeText(corpus):
         # previous_word = ''
 
     tokens = lemmas[1:] # remove the very first -EOF-
-    # punctuation symbols, and pick out only words
-    # and re.match('^[a-zA-Z]+$', tok) != None
-    # tokens = [tok for tok in tokens if tok not in PUNC_SYMBOLS and re.match('^[a-zA-Z\-]+$', tok) != None]
-    
-    # print(tokens[:100])
+
     for tok in tokens[:500]:
         try:
             print(tok)
@@ -174,44 +174,52 @@ def generate_batch(batch_size, num_samples, skip_window):
 
     RIGHT_BOUND = len(data_filled_with_num) - span - 1
     data_index += span
+    context_words = []
+    for i in range(1, skip_window+1):
+        context_words.append(skip_window + i)
+        context_words.append(skip_window - i)
+
     for i in range(batch_size // num_samples):
-        ## pick a proper center word
-        while reverse_dictionary[buffer[skip_window]] == '-EOF-' or is_keep_as_context(reverse_dictionary[buffer[skip_window]]) == False:
+        ### pick a proper center word
+        # skip -EOF-
+        while reverse_dictionary[buffer[skip_window]] == '-EOF-': # or is_keep_as_context(reverse_dictionary[buffer[skip_window]]) == False
             if data_index >= RIGHT_BOUND:
                 data_index = span
                 buffer.extend(data_filled_with_num[:span])
-
             data_index += 1
             buffer.append(data_filled_with_num[data_index + span])
 
-        # context_words = [w for w in range(span) if w != skip_window]
-        # random.shuffle(context_words)
-        context_words = []
-        for i in range(1, skip_window+1):
-            context_words.append(skip_window + i)
-            context_words.append(skip_window - i)
         words_to_use = collections.deque(context_words) # now we obtain a random list of context words
 
-        try:
-            print('generate batch data_index = {}, buffer = {}'.format(data_index, [reverse_dictionary[w] for w in buffer]))
-        except UnicodeEncodeError:
-            print('UnicodeEncodeError')
-
-        ## pick context word
+        ### pick context word
+        # first, prefer ADJ,NOUN, ADJ,VERB combination
+        # second, probabilistically pick context words otherwise
         j = 0
         while j < num_samples:
             context_word = words_to_use.pop()
             if len(words_to_use) == 0 and j < num_samples:
                 words_to_use.extend(context_words)
-            if reverse_dictionary[buffer[skip_window]] != '-EOF-' and is_keep_as_context(reverse_dictionary[buffer[context_word]]):
+
+            if (reverse_dictionary[buffer[context_word]])[-3:] in ['VERB', 'NOUN', 'ADJ'] and (reverse_dictionary[buffer[skip_window]])[-3:] in ['VERB', 'NOUN', 'ADJ']:
+                batch[i * num_samples + j] = buffer[skip_window]
+                labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
+                j += 1
+            elif reverse_dictionary[buffer[skip_window]] != '-EOF-' and is_keep_as_context(reverse_dictionary[buffer[context_word]]):
                 batch[i * num_samples + j] = buffer[skip_window]
                 labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
                 j += 1
 
+        ### flush buffer, if that contains -EOF-
+        if dictionary['-EOF-'] in buffer:
+            # general process, can't use `list(buffer).index(dictionary['-EOF-'])`
+            data_index += skip_window
+            if data_index >= RIGHT_BOUND:
+                data_index = span
+                buffer.extend(data_filled_with_num[:span])
+
         while dictionary['-EOF-'] in buffer:
             if buffer.popleft() == dictionary['-EOF-']:
                 break
-            # print('try to pop the EOF out')
             buffer.append(data_filled_with_num[data_index])
             data_index += 1
             if data_index >= RIGHT_BOUND:
@@ -248,11 +256,11 @@ def write_embedding_to_file(final_embeddings, embeddings_file_name):
 
 
 def process_data(input_data_dir):
-    if os.path.exists('processed_data.pkl'):
-        with open("processed_data.pkl", "rb") as fp:   # Unpickling
-            global parser
-            parser = English()
-            return pickle.load(fp)
+    # if os.path.exists('processed_data.pkl'):
+    #     with open("processed_data.pkl", "rb") as fp:   # Unpickling
+    #         global parser
+    #         parser = English()
+    #         return pickle.load(fp)
 
     data = ''
     with zipfile.ZipFile(input_data_dir) as zipf:
@@ -264,8 +272,8 @@ def process_data(input_data_dir):
 
     data = tokenizeText(data)
 
-    with open("processed_data.pkl", "wb") as fp:   #Pickling
-        pickle.dump(data, fp)
+    # with open("processed_data.pkl", "wb") as fp:   #Pickling
+    #     pickle.dump(data, fp)
 
     print('len(data): ',len(data))
 
@@ -352,8 +360,8 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
             batch_inputs, batch_labels = generate_batch(batch_size, num_samples, skip_window)
             # print('print batch_inputs and batch_labels, len(batch_inputs): ', len(batch_inputs))
             # for i in range(len(batch_inputs) - 10, len(batch_inputs)):
-            #     print('batch_inputs: ', batch_inputs[i])
-            #     print('batch_labels: ', batch_labels[i][0])
+            #     print('batch_inputs: ', reverse_dictionary[batch_inputs[i]])
+            #     print('batch_labels: ', reverse_dictionary[batch_labels[i][0]])
             feed_dict = {train_inputs: batch_inputs, train_labels: batch_labels}
 
             # We perform one update step by evaluating the optimizer op using session.run()
@@ -403,7 +411,11 @@ def Compute_topk(model_file, input_adjective, top_k):
     # tword_token = parser(input_adjective)[0]
     temp_topk_multiplier = 5
     # distances, ndx = tree.query(dictionary[input_adjective], k = top_k * temp_topk_multiplier)
-    temp_result = model.most_similar(positive=[input_adjective + 'ADJ'], topn= top_k * temp_topk_multiplier)
+    try:
+        # the word may not exists in embedding file
+        temp_result = model.most_similar(positive=[input_adjective + 'ADJ'], topn= top_k * temp_topk_multiplier)
+    except:
+        return []
     words = [r[0] for r in temp_result]
 
     while len(output) < top_k:
@@ -414,7 +426,7 @@ def Compute_topk(model_file, input_adjective, top_k):
             # and word[:-3] not in list(ENGLISH_STOP_WORDS)
             if word[-3:] == 'ADJ' and word[:-3] not in list(SELF_DEFINED_STOP_WORD):
                 output.append(word[:-3])
-            elif parser(word)[0].pos_ == 'ADJ':
+            elif parser(word)[0].pos_ == 'ADJ' and word not in output:
                 output.append(word)
 
         if temp_topk_multiplier > 10:
