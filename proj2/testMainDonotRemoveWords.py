@@ -65,37 +65,37 @@ def tokenizeText(corpus):
 
     # use eof instead of eos, since there may be situation where one sentence is too short
 
-    # for sentence in tokens.sents:
-    for tok in tokens:
-        if tok.orth_ == 'EOF':
-            lemmas.append('-EOF-')
-        elif tok.ent_type_ != "" and "-"+tok.ent_type_+"-" != previous_word:
-            # may consider do lemmas.append("-"+tok.ent_type_+"-")
-            # print('tok.ent_type_: ', tok.ent_type_)
-            lemmas.append("-"+tok.ent_type_+"-")
-            # continue
-        elif tok.pos_ in skip_pos:
-            continue
-        elif tok.pos_ == 'ADJ':
-            lemmas.append(tok.orth_.lower().strip()+'ADJ')
-        elif tok.pos_ == 'NOUN':
-            lemmas.append(tok.orth_.lower().strip()+'NOUN')
-        elif tok.pos_ == 'VERB':
-            lemmas.append(tok.lemma_.lower().strip()+'VERB')
-        elif tok.pos_ in useless_pos and tok.pos_ != previous_word:
-            lemmas.append(tok.pos_)
-        #     # maybe add 'PREP' later
-        else:
-            lemmas.append(tok.lemma_.lower().strip())
+    for sentence in tokens.sents:
+        for tok in sentence:
+            if tok.orth_ == 'EOF':
+                lemmas.append('-EOF-')
+            elif tok.ent_type_ != "" and "-"+tok.ent_type_+"-" != previous_word:
+                # may consider do lemmas.append("-"+tok.ent_type_+"-")
+                # print('tok.ent_type_: ', tok.ent_type_)
+                lemmas.append("-"+tok.ent_type_+"-")
+                # continue
+            elif tok.pos_ in skip_pos:
+                continue
+            elif tok.pos_ == 'ADJ':
+                lemmas.append(tok.orth_.lower().strip()+'ADJ')
+            elif tok.pos_ == 'NOUN':
+                lemmas.append(tok.orth_.lower().strip()+'NOUN')
+            elif tok.pos_ == 'VERB':
+                lemmas.append(tok.lemma_.lower().strip()+'VERB')
+            elif tok.pos_ in useless_pos and tok.pos_ != previous_word:
+                lemmas.append(tok.pos_)
+            #     # maybe add 'PREP' later
+            else:
+                lemmas.append(tok.lemma_.lower().strip())
 
-        # clean up
-        if re.match('^[a-zA-Z\-]+$', lemmas[-1]) != None:
-            previous_word = lemmas[-1]
-        else:
-            lemmas.pop()
-
-        # lemmas.append('-EOS-')
-        # previous_word = ''
+            # clean up
+            if re.match('^[a-zA-Z\-]+$', lemmas[-1]) != None:
+                previous_word = lemmas[-1]
+            else:
+                lemmas.pop()
+                
+        lemmas.append('-EOS-')
+        previous_word = ''
 
     tokens = lemmas[1:] # remove the very first -EOF-
 
@@ -200,11 +200,12 @@ def generate_batch(batch_size, num_samples, skip_window):
             if len(words_to_use) == 0 and j < num_samples:
                 words_to_use.extend(context_words)
 
-            if (reverse_dictionary[buffer[context_word]])[-3:] in ['VERB', 'NOUN', 'ADJ'] and (reverse_dictionary[buffer[skip_window]])[-3:] in ['VERB', 'NOUN', 'ADJ']:
+            #  or ((reverse_dictionary[buffer[skip_window]])[-3:] in ['VERB', 'NOUN'] and (reverse_dictionary[buffer[context_word]])[-3:] == 'ADJ')
+            if ((reverse_dictionary[buffer[context_word]])[-3:] in ['VERB', 'NOUN'] and (reverse_dictionary[buffer[skip_window]])[-3:] == 'ADJ'):
                 batch[i * num_samples + j] = buffer[skip_window]
                 labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
                 j += 1
-            elif reverse_dictionary[buffer[skip_window]] != '-EOF-' and is_keep_as_context(reverse_dictionary[buffer[context_word]]):
+            elif reverse_dictionary[buffer[context_word]] != '-EOF-' and is_keep_as_context(reverse_dictionary[buffer[context_word]]):
                 batch[i * num_samples + j] = buffer[skip_window]
                 labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
                 j += 1
