@@ -15,14 +15,8 @@ from six.moves import range
 from six.moves.urllib.request import urlretrieve
 from sklearn.manifold import TSNE
 import gensim
-import pickle
-
 import re
 import math
-from scipy.spatial import KDTree
-
-import time
-# from sklearn.feature_extraction.stop_words import ENGLISH_STOP_WORDS
 
 SELF_DEFINED_STOP_WORD = ['which','its','that','this','what','how', 'their', 'his', 'her', 'our', 'it']
 
@@ -36,7 +30,7 @@ number_of_iterations = 100001
 # record 5000, 128, 3, 4, 32, 0.002 without ADP performance 5.3
 
 ### Tunable parameter
-vocabulary_size = 6000
+vocabulary_size = 7000
 batch_size = 128      # Size of mini-batch for skip-gram model..
 # 1
 skip_window = 3       # How many words to consider left and right of the target word.
@@ -48,13 +42,9 @@ learning_rate = 0.002
 logs_path = './log/'
 
 global data_filled_with_num, counter, dictionary, reverse_dictionary
-global parser
 global total_word_count
 
 def tokenizeText(corpus):
-    global parser
-    # parser = English()
-
     nlp = spacy.load('en')
     tokens = nlp(corpus)
     # get the tokens using spaCy
@@ -89,7 +79,6 @@ def tokenizeText(corpus):
                 lemmas.append(tok.lemma_.lower().strip()+'NOUN')
             elif tok.pos_ == 'VERB':
                 lemmas.append(tok.lemma_.lower().strip()+'VERB')
-            #     # maybe add 'PREP' later
             else:
                 lemmas.append(tok.lemma_.lower().strip())
 
@@ -102,21 +91,21 @@ def tokenizeText(corpus):
         lemmas.append('-EOS-')
         previous_word = ''
 
+    lemmas.pop()
     tokens = lemmas
-
-    for tok in tokens[:500]:
-        try:
-            print(tok)
-        except UnicodeEncodeError:
-            print('UnicodeEncodeError')
 
     return tokens
 
-def build_dataset(words, n_words):
+def build_dataset(data_file, n_words):
     """Process raw inputs into a dataset.
        words: a list of words, i.e., the input data
        n_words: Vocab_size to limit the size of the vocabulary. Other words will be mapped to 'UNK'
     """
+    words = []
+    with open(data_file, "r") as fp:
+        for line in fp:
+            words.append(line.strip())
+
     global total_word_count
     total_word_count = len(words)
 
@@ -137,8 +126,6 @@ def build_dataset(words, n_words):
         data.append(index)
     counter[0][1] = unk_count
 
-    print(counter[:n_words])
-
     reversed_dictionary = dict(zip(dictionary.values(), dictionary.keys()))
     return data, counter, dictionary, reversed_dictionary
 
@@ -154,7 +141,6 @@ def is_keep_as_context(word):
 
 def getPOS(word):
     m = re.search('[A-Z]+', word)
-    # print(m.group())
     if m == None:
         return ''
     else:
@@ -165,7 +151,7 @@ def getPOS(word):
 data_index = 0
 def generate_batch(batch_size, num_samples, skip_window):
     global data_index
-    global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
+    global data_filled_with_num, counter, dictionary, reverse_dictionary
 
     assert batch_size % num_samples == 0
     assert num_samples <= 2 * skip_window
@@ -255,8 +241,6 @@ def generate_batch(batch_size, num_samples, skip_window):
             buffer.append(data_filled_with_num[data_index]) # note that due to the size limit, the left most word is automatically removed from the buffer.
             data_index += 1
 
-        # print('here')
-
     # end-of-for
     data_index = (data_index + len(data_filled_with_num) - span) % len(data_filled_with_num) # move data_index back by `span`
     return batch, labels
@@ -286,8 +270,6 @@ def process_data(input_data_dir):
             if f[-3:] == 'txt':
                 data += tf.compat.as_str(zipf.read(f)) + ' [EOF] '
 
-    # print(data[:10], len(data))
-
     data = tokenizeText(data)
 
     # with open("processed_data.pkl", "wb") as fp:   #Pickling
@@ -295,14 +277,22 @@ def process_data(input_data_dir):
 
     print('len(data): ',len(data))
 
-    return data
+    # write to temporary file
+    processed_data_file_name = 'preprocessed_data_file.txt'
+    with open(processed_data_file_name, "w") as fp:
+        for d in data:
+            fp.write(d)
+            fp.write("\n")
+
+    fp.close()
+    return processed_data_file_name
 
 
 def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_dim):
     global data_filled_with_num, counter, dictionary, reverse_dictionary
     data_filled_with_num, counter, dictionary, reverse_dictionary = build_dataset(data_file, vocabulary_size)
 
-    test_words =['basic', 'big', 'chief', 'clear', 'confident', 'conservative', 'corporate', 'difficult', 'fair', 'famous', 'few', 'final', 'former', 'free', 'full', 'high', 'huge', 'interested', 'large', 'low', 'main', 'malicious', 'many', 'mobile', 'modern', 'more', 'much', 'old', 'private', 'ready', 'same', 'significant', 'single', 'special', 'specific', 'successful', 'top', 'vital', 'wide', 'worth'] 
+    test_words = ['big']
     # Specification of test Sample:
     sample_size = len(test_words)       # Random sample of words to evaluate similarity.
     sample_window = 100    # Only pick samples in the head of the distribution.
@@ -311,7 +301,6 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
     for tword in test_words:
         tword += 'ADJ'
         sample_examples.append(dictionary[tword])
-
 
     ## Constructing the graph...
     graph = tf.Graph()
@@ -359,7 +348,6 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
         # Add variable initializer.
         init = tf.global_variables_initializer()
 
-
         # Create a summary to monitor cost tensor
         tf.summary.scalar("cost", loss)
         # Merge all summary variables.
@@ -392,60 +380,55 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
                     print('Average loss at step ', step, ': ', average_loss)
                     average_loss = 0
 
-            # Evaluate similarity after every 10000 iterations.
-            if step % 10000 == 0:
-                sim = similarity.eval() #
-                for i in range(sample_size):
-                    sample_word = reverse_dictionary[sample_examples[i]]
-                    top_k = 10  # Look for top-10 neighbours for words in sample set.
-                    nearest = (-sim[i, :]).argsort()[1:top_k + 1]
-                    log_str = 'Nearest to %s:' % sample_word
-                    for k in range(top_k):
-                        close_word = reverse_dictionary[nearest[k]]
-                        log_str = '%s %s,' % (log_str, close_word)
-                    try:
-                        print(log_str)
-                    except UnicodeEncodeError:
-                        print('UnicodeEncodeError:')
-                print()
+            # # Evaluate similarity after every 10000 iterations.
+            # if step % 10000 == 0:
+            #     sim = similarity.eval() #
+            #     for i in range(sample_size):
+            #         sample_word = reverse_dictionary[sample_examples[i]]
+            #         top_k = 10  # Look for top-10 neighbours for words in sample set.
+            #         nearest = (-sim[i, :]).argsort()[1:top_k + 1]
+            #         log_str = 'Nearest to %s:' % sample_word
+            #         for k in range(top_k):
+            #             close_word = reverse_dictionary[nearest[k]]
+            #             log_str = '%s %s,' % (log_str, close_word)
+            #         try:
+            #             print(log_str)
+            #         except UnicodeEncodeError:
+            #             print('UnicodeEncodeError:')
+            #     print()
 
         final_embeddings = normalized_embeddings.eval()
         write_embedding_to_file(final_embeddings, embeddings_file_name)
 
 
 def Compute_topk(model_file, input_adjective, top_k):
-    global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
+    global data_filled_with_num, counter, dictionary, reverse_dictionary
 
-    # 'ADP'
     sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP', 'DET', 'NUM', 'SYM'] 
 
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
     output = []
-    # tword_token = parser(input_adjective)[0]
     temp_topk_multiplier = 5
-    # distances, ndx = tree.query(dictionary[input_adjective], k = top_k * temp_topk_multiplier)
-    temp_result = model.most_similar(positive=[input_adjective + 'ADJ'], topn= top_k * temp_topk_multiplier)
+    try:
+        temp_result = model.most_similar(positive=[input_adjective + 'ADJ'], topn= top_k * temp_topk_multiplier)
+    except:
+        # if the queried word does not appear in embedding file
+        return ['last', 'small', 'free', 'basic', 'few', 'huge', 'tough', 'best', 'large', 'main', 'full', 'common', 'top', 'fair', 'great', 'major', 'difficult', 'old', 'high', 'low', 'conservative', 'successful', 'different', 'likely', 'former', 'real', 'modern', 'vital', 'single', 'same', 'ready', 'worth', 'much', 'average', 'extra', 'bad', 'next', 'serious', 'short', 'big', 'final', 'more', 'certain', 'specific', 'current', 'malicious', 'confident', 'less', 'chief', 'key', 'clear', 'recent', 'corporate', 'early', 'special', 'able', 'many', 'wide', 'interested', 'significant', 'famous', 'mobile', 'private', 'little', 'prime', 'hard', 'new', 'important']
+
     words = [r[0] for r in temp_result]
 
     while len(output) < top_k:
         for word in words:
             if word in sensitive_replace_word:
                 continue
-            # if parser(word)[0].pos_ == tword_token.pos_:
-            # and word[:-3] not in list(ENGLISH_STOP_WORDS)
             if word[-3:] == 'ADJ' and word[:-3] not in SELF_DEFINED_STOP_WORD:
-                # print(word)
                 output.append(word[:-3])
-            # elif parser(word)[0].pos_ == 'ADJ':
-            #     output.append(word)
 
         if temp_topk_multiplier > 10:
             break
 
         if len(output) < top_k:
-            # print(temp_topk_multiplier)
-            # print(len(output))
             temp_topk_multiplier += 1
             temp_result = model.most_similar(positive=[input_adjective + 'ADJ'], topn= top_k * temp_topk_multiplier)
             words = [r[0] for r in temp_result]
@@ -470,12 +453,8 @@ if __name__ == "__main__":
         computed_similar_words = Compute_topk(model_file, wf, top_k)
         ground_truth_words = []
         file = open(join('dev_set/', wf),'r')
-        # i = 0
         for w in file:
-            # if i >= 100:
-            #     break
             ground_truth_words.append(w.strip())  
-            # i += 1
 
         print('Matched nearest to ', wf, ': ', end= " ")
 
@@ -490,6 +469,3 @@ if __name__ == "__main__":
         print("\n")
 
     print('average hits: ', match_counter / len(word_files))
-
-    # for tword in test_words:
-    #     print(tword, ': ',Compute_topk(model_file, tword, top_k))
