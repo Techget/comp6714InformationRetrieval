@@ -21,9 +21,8 @@ import math
 from scipy.spatial import KDTree
 
 import time
-# from sklearn.feature_extraction.stop_words import ENGLISH_STOP_WORDS
+from sklearn.feature_extraction.stop_words import ENGLISH_STOP_WORDS
 
-SELF_DEFINED_STOP_WORD = ['which','its','that','this','what','how', 'their', 'his', 'her', 'our', 'it']
 
 ### fixed parameters
 embedding_dim = 200
@@ -35,7 +34,7 @@ number_of_iterations = 100001
 # record 5000, 128, 3, 4, 32, 0.002 without ADP performance 5.3
 
 ### Tunable parameter
-vocabulary_size = 10000
+vocabulary_size = 5000
 batch_size = 128      # Size of mini-batch for skip-gram model..
 # 1
 skip_window = 3       # How many words to consider left and right of the target word.
@@ -56,11 +55,13 @@ def tokenizeText(corpus):
     # get the tokens using spaCy
     tokens = parser(corpus)
 
+    # PUNC_SYMBOLS = " ".join(string.punctuation).split(" ") + ["-----", "---", "...", "“", "”", "'ve", " "]
+
     # lemmatize
     # 'VERB', 'NOUN', 'ADV', consider only use ADJ
     # important_pos = ['VERB', 'NOUN']
-    useless_pos = ['NUM', 'SYM', 'CONJ', 'PREP', 'PRON', 'DET', 'PPRON'] # 'ADP'
-    skip_pos = ['PUNCT', 'SPACE', 'PART'] # , 'PART'
+    useless_pos = ['NUM', 'SYM', 'CONJ', 'PREP', 'PRON', 'DET', 'PPRON', 'ADP'] # 'PROPN', 'CCONJ', 'ADP', 'DET', 'PRON', 'CONJ', 'PREP'
+    skip_pos = ['PUNCT', 'SPACE'] # , 'PART'
     lemmas = []
     previous_word = ''
 
@@ -79,10 +80,12 @@ def tokenizeText(corpus):
                 continue
             elif tok.pos_ == 'ADJ':
                 lemmas.append(tok.orth_.lower().strip()+'ADJ')
-            elif tok.pos_ == 'NOUN':
-                lemmas.append(tok.lemma_.lower().strip()+'NOUN')
-            elif tok.pos_ == 'VERB':
-                lemmas.append(tok.lemma_.lower().strip()+'VERB')
+            # elif tok.pos_ == 'NOUN':
+            #     lemmas.append(tok.orth_.lower().strip()+'NOUN')
+            # elif tok.pos_ == 'VERB':
+            #     lemmas.append(tok.lemma_.lower().strip()+'VERB')
+            # elif tok.pos_ in important_pos:
+            #     lemmas.append(tok.lemma_.lower().strip()+tok.pos_)
             elif tok.pos_ in useless_pos and tok.pos_ != previous_word:
                 lemmas.append(tok.pos_)
             #     # maybe add 'PREP' later
@@ -148,14 +151,6 @@ def is_keep_as_context(word):
     else:
         return False
 
-def getPOS(word):
-    m = re.search('[A-Z]+', word)
-    # print(m.group())
-    if m == None:
-        return ''
-    else:
-        return m.group()
-
 
 # used in generate_batch
 data_index = 0
@@ -201,13 +196,7 @@ def generate_batch(batch_size, num_samples, skip_window):
             context_word = words_to_use.pop()
             if len(words_to_use) == 0 and j < num_samples:
                 words_to_use.extend([w for w in range(span) if w != skip_window])
-            
-            # ADJ
-            if getPOS(reverse_dictionary[buffer[context_word]]) in ['NOUN', 'VERB'] and getPOS(reverse_dictionary[buffer[skip_window]]) == 'ADJ':
-                batch[i * num_samples + j] = buffer[skip_window]
-                labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
-                j += 1
-            elif reverse_dictionary[buffer[skip_window]] != '-EOF-' and is_keep_as_context(reverse_dictionary[buffer[context_word]]):
+            if reverse_dictionary[buffer[skip_window]] != '-EOF-' and is_keep_as_context(reverse_dictionary[buffer[context_word]]):
                 batch[i * num_samples + j] = buffer[skip_window]
                 labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
                 j += 1
@@ -402,7 +391,7 @@ def Compute_topk(model_file, input_adjective, top_k):
     global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
     # 'ADP'
-    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP', 'DET', 'NUM', 'SYM'] 
+    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP', 'DET', 'NUM', 'SYM']
 
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
@@ -419,11 +408,11 @@ def Compute_topk(model_file, input_adjective, top_k):
                 continue
             # if parser(word)[0].pos_ == tword_token.pos_:
             # and word[:-3] not in list(ENGLISH_STOP_WORDS)
-            if word[-3:] == 'ADJ' and word[:-3] not in SELF_DEFINED_STOP_WORD:
+            if word[-3:] == 'ADJ':
                 # print(word)
                 output.append(word[:-3])
-            # elif parser(word)[0].pos_ == 'ADJ':
-            #     output.append(word)
+            elif parser(word)[0].pos_ == 'ADJ':
+                output.append(word)
 
         if temp_topk_multiplier > 10:
             break
@@ -466,10 +455,7 @@ if __name__ == "__main__":
 
         for csw in computed_similar_words:
             if csw in ground_truth_words:
-                try:
-                    print(csw, " ", end=" ")
-                except UnicodeEncodeError:
-                    print('UnicodeEncodeError:')
+                print(csw, " ", end=" ")
                 match_counter += 1
 
         print("\n")
