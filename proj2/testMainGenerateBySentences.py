@@ -57,8 +57,8 @@ def tokenizeText(corpus):
     # lemmatize
     # 'VERB', 'NOUN', 'ADV', consider only use ADJ
     # important_pos = ['ADJ', 'NOUN']
-    useless_pos = ['PRON', 'CONJ', 'PREP', 'DET', 'NUM', 'SYM'] # 'ADP'
-    skip_pos = ['PUNCT', 'SPACE', 'PART']
+    useless_pos = ['NUM', 'SYM'] # 'ADP', 'PRON', 'CONJ', 'PREP', 'DET', 
+    skip_pos = ['PUNCT', 'SPACE'] # , 'PART'
     lemmas = []
     previous_word = ''
 
@@ -72,6 +72,10 @@ def tokenizeText(corpus):
                 continue
             elif tok.pos_ == 'ADJ':
                 sentence_list.append(tok.orth_.lower().strip()+'ADJ')
+            elif tok.pos_ == 'NOUN':
+                sentence_list.append(tok.orth_.lower().strip()+'NOUN')
+            elif tok.pos_ == 'VERB':
+                sentence_list.append(tok.lemma_.lower().strip()+'VERB')
             elif tok.pos_ in useless_pos and tok.pos_ != previous_word:
                 sentence_list.append(tok.pos_)
             else:
@@ -86,7 +90,7 @@ def tokenizeText(corpus):
 
     tokens = lemmas
 
-    for tok in tokens[:100]:
+    for tok in tokens[:10]:
         try:
             print(tok)
         except UnicodeEncodeError:
@@ -194,9 +198,9 @@ def generate_batch(batch_size, num_samples, skip_window):
                 center_word_index = skip_window
             while center_word_index < len(st_of_numbers) - skip_window:
                 ## pick center word
-                if is_keep_as_context(reverse_dictionary[st_of_numbers[center_word_index]]) == False:
-                    center_word_index += 1
-                    continue
+                # if is_keep_as_context(reverse_dictionary[st_of_numbers[center_word_index]]) == False:
+                center_word_index += 1
+                    # continue
                 ## pick context word
                 context_words_indexes = [w for w in range(center_word_index - skip_window, center_word_index + skip_window + 1) if w != center_word_index]
                 random.shuffle(context_words_indexes)
@@ -207,7 +211,9 @@ def generate_batch(batch_size, num_samples, skip_window):
                     if len(words_to_use) == 0:
                         words_to_use.extend(context_words_indexes)
 
-                    if is_keep_as_context(reverse_dictionary[st_of_numbers[context_word_index]]):
+                    if ((reverse_dictionary[st_of_numbers[context_word_index]])[-4:] in ['VERB', 'NOUN'] and (reverse_dictionary[st_of_numbers[center_word_index]])[-3:] == 'ADJ')\
+                        or is_keep_as_context(reverse_dictionary[st_of_numbers[context_word_index]]):
+                        
                         batch[entries_in_batch] = st_of_numbers[center_word_index]
                         labels[entries_in_batch, 0] = st_of_numbers[context_word_index] 
                         entries_in_batch += 1
@@ -386,7 +392,7 @@ def Compute_topk(model_file, input_adjective, top_k):
     global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
     # 'ADP'
-    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP', 'DET', 'NUM', 'SYM'] 
+    sensitive_replace_word = ['UNK', 'CONJ', 'NUM', 'SYM'] # 'PRON', 'CONJ', 'PREP', 'DET',
 
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
@@ -405,7 +411,7 @@ def Compute_topk(model_file, input_adjective, top_k):
             # and word[:-3] not in list(ENGLISH_STOP_WORDS)
             if word[-3:] == 'ADJ' and word[:-3] not in list(SELF_DEFINED_STOP_WORD):
                 output.append(word[:-3])
-            elif parser(word)[0].pos_ == 'ADJ':
+            elif parser(word)[0].pos_ == 'ADJ' and word not in output:
                 output.append(word)
 
         if temp_topk_multiplier > 10:

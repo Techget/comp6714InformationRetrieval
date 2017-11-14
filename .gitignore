@@ -3,3 +3,5 @@ proj2/submission/__MACOSX/._submission.py
 proj2/log/*
 proj2/*.pkl
 proj2/*.txt
+proj2/dev_set/*
+proj2/__pycache__

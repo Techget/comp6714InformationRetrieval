@@ -32,11 +32,11 @@ number_of_iterations = 100001
 # record 5000, 128, 3, 4, 32, 0.002 without ADP performance 5.3
 
 ### Tunable parameter
-vocabulary_size = 10000
+vocabulary_size = 7000
 batch_size = 128      # Size of mini-batch for skip-gram model..
 skip_window = 3       # How many words to consider left and right of the target word.
 num_samples = 4         # How many times to reuse an input to generate a label.
-num_sampled_ns = 64        # How many negative samples going to be chose, as suggested 10~30 for small dataset
+num_sampled_ns = 32        # How many negative samples going to be chose, as suggested 10~30 for small dataset
 learning_rate = 0.002
 
 logs_path = './log/'
@@ -58,7 +58,7 @@ def tokenizeText(corpus):
     # lemmatize
     # 'VERB', 'NOUN', 'ADV', consider only use ADJ
     # important_pos = ['VERB', 'NOUN']
-    useless_pos = ['NUM', 'SYM', 'CONJ'] # 'PROPN', 'CCONJ', 'ADP', 'DET', 'PRON', 'CONJ', 'PREP'
+    useless_pos = ['NUM', 'SYM', 'CONJ', 'PREP', 'PRON'] # 'PROPN', 'CCONJ', 'ADP', 'DET', 'PRON', 'CONJ', 'PREP'
     skip_pos = ['PUNCT', 'SPACE'] # , 'PART'
     lemmas = []
     previous_word = ''
@@ -93,7 +93,7 @@ def tokenizeText(corpus):
                 previous_word = lemmas[-1]
             else:
                 lemmas.pop()
-                
+
         lemmas.append('-EOS-')
         previous_word = ''
 
@@ -149,6 +149,14 @@ def is_keep_as_context(word):
     else:
         return False
 
+def getPOS(word):
+    m = re.search('[A-Z]+', word)
+    # print(m.group())
+    if m == None:
+        return ''
+    else:
+        return m.group()
+
 
 # used in generate_batch
 data_index = 0
@@ -200,8 +208,8 @@ def generate_batch(batch_size, num_samples, skip_window):
             if len(words_to_use) == 0 and j < num_samples:
                 words_to_use.extend(context_words)
 
-            #  or ((reverse_dictionary[buffer[skip_window]])[-3:] in ['VERB', 'NOUN'] and (reverse_dictionary[buffer[context_word]])[-3:] == 'ADJ')
-            if ((reverse_dictionary[buffer[context_word]])[-3:] in ['VERB', 'NOUN'] and (reverse_dictionary[buffer[skip_window]])[-3:] == 'ADJ'):
+            # 'VERB',
+            if getPOS(reverse_dictionary[buffer[context_word]]) in ['NOUN', 'ADJ'] and getPOS(reverse_dictionary[buffer[skip_window]]) == 'ADJ':
                 batch[i * num_samples + j] = buffer[skip_window]
                 labels[i * num_samples + j, 0] = buffer[context_word] # buffer[context_word] is a random context word
                 j += 1
@@ -401,10 +409,10 @@ def adjective_embeddings(data_file, embeddings_file_name, num_steps, embedding_d
 
 
 def Compute_topk(model_file, input_adjective, top_k):
-    global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
+    # global data_filled_with_num, counter, dictionary, reverse_dictionary, parser
 
     # 'ADP', 'DET'
-    sensitive_replace_word = ['UNK', 'PRON', 'CONJ', 'PREP' , 'NUM', 'SYM'] 
+    sensitive_replace_word = ['UNK', 'CONJ', 'NUM', 'SYM'] # 'PRON', 'PERP'
 
     model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
@@ -416,6 +424,7 @@ def Compute_topk(model_file, input_adjective, top_k):
         # the word may not exists in embedding file
         temp_result = model.most_similar(positive=[input_adjective + 'ADJ'], topn= top_k * temp_topk_multiplier)
     except:
+        # ******* try to extract 100 adjectives later
         return []
     words = [r[0] for r in temp_result]
 
@@ -427,8 +436,9 @@ def Compute_topk(model_file, input_adjective, top_k):
             # and word[:-3] not in list(ENGLISH_STOP_WORDS)
             if word[-3:] == 'ADJ' and word[:-3] not in list(SELF_DEFINED_STOP_WORD):
                 output.append(word[:-3])
-            elif parser(word)[0].pos_ == 'ADJ' and word not in output:
-                output.append(word)
+            # this elif is QUESTIONABLE, TEST IT AFTER ALL
+            # elif parser(word)[0].pos_ == 'ADJ' and word not in output:
+            #     output.append(word)
 
         if temp_topk_multiplier > 10:
             break

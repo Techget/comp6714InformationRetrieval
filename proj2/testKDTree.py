@@ -2,11 +2,11 @@ import random
 from scipy import spatial
 
 
-import gensim
-model_file = 'adjective_embeddings.txt'
-model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
+# import gensim
+# model_file = 'adjective_embeddings.txt'
+# model = gensim.models.KeyedVectors.load_word2vec_format(model_file, binary=False)
 
-print(model.most_similar(positive=['happy'], topn= 5))
+# print(model.most_similar(positive=['happy'], topn= 5))
 
 
 matrix = []
